@@ -1,0 +1,137 @@
+"""Tests for parameter extraction: can the fitter recover known parameters?"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pytest
+
+from vdmos_fit import (
+    DEFAULT,
+    CurveSet,
+    Params,
+    example_dataset,
+    fit,
+    identifiability,
+    make_synthetic,
+    parameter_uncertainty,
+    sensitivity_report,
+    vdmos_id,
+)
+
+TRUTH = Params(
+    kp=30.0, vth0=3.1, theta=0.02, vsat=1.2, eta=0.03, lam=0.015, gds=2e-3, gk=0.3, vthk=1.5
+)
+
+
+@pytest.fixture(scope="module")
+def synthetic():
+    vgs = np.linspace(2.0, 14.0, 25)
+    vds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
+    return make_synthetic(TRUTH, vgs, vds, noise=0.005, seed=3)
+
+
+def test_fit_recovers_synthetic_parameters(synthetic):
+    """Noiseless-ish synthetic data must round-trip back to the truth.
+
+    Only the strongly-sensed parameters are checked tightly; theta and vthk are
+    weakly identified from this grid (see the identifiability tests) and are
+    deliberately not asserted here.
+    """
+    res = fit(synthetic, start=DEFAULT, weight="relative")
+    assert res.success
+    assert res.rmse_rel < 0.02
+    got, want = res.params.as_dict(), TRUTH.as_dict()
+    for name in ("kp", "vth0", "vsat", "eta", "lam", "gk"):
+        assert got[name] == pytest.approx(want[name], rel=0.2), name
+
+
+def test_fit_improves_on_default_start(synthetic):
+    res = fit(synthetic, start=DEFAULT)
+    start_err = np.sqrt(
+        np.mean(
+            (
+                (vdmos_id(synthetic.vds, synthetic.vgs, DEFAULT) - synthetic.ids)
+                / np.maximum(np.abs(synthetic.ids), 1e-3)
+            )
+            ** 2
+        )
+    )
+    assert res.rmse_rel < 0.2 * start_err
+
+
+def test_bounds_are_respected(synthetic):
+    """A deliberately absurd start must still land inside physical bounds."""
+    bad = DEFAULT.replace(kp=1e-4, theta=1e-4, vsat=1e-3, gds=1e-8)
+    res = fit(synthetic, start=bad)
+    assert res.params.kp > 0 and res.params.vsat > 0 and res.params.theta > 0
+
+
+def test_fixed_parameters_stay_fixed(synthetic):
+    """Fitting only kp/vth0 must not move theta."""
+    res = fit(synthetic, start=DEFAULT, free=("kp", "vth0"))
+    assert res.params.theta == DEFAULT.theta
+    assert res.params.vsat == DEFAULT.vsat
+
+
+def test_uncertainty_report_shape(synthetic):
+    res = fit(synthetic)
+    unc = parameter_uncertainty(res)
+    assert set(unc) == set(("kp", "vth0", "theta", "vsat", "eta", "lam", "gds", "gk", "vthk"))
+    assert all(v >= 0 for v in unc.values())
+
+
+def test_kink_parameters_are_weakly_determined(synthetic):
+    """The kink onset is barely sampled by this grid, so vthk is poorly determined.
+
+    vthk = 1.5 V with kk = 0.1 V means the kink sigmoid is essentially saturated
+    (=1) for every Vgs >= 2 V in this grid, so only the very lowest curves carry
+    information about it. The fit lands at ~1.7 V against a truth of 1.5 V -- a
+    16 % error -- and the report must show a correspondingly huge sigma rather
+    than hiding it. Fix vthk from a measurement, or add dense Vgs points through
+    the kink region, before trusting it.
+    """
+    ident = identifiability(fit(synthetic))
+    assert ident.sigma_rel["vthk"] > 1.0  # order-unity or worse
+    assert ident.sigma_rel["kp"] < 1.0  # core shape params are fine
+    assert ident.rank == ident.n_free  # not degenerate, just weak
+    assert ident.cond < 1e4
+
+
+def test_sensitivity_report_ranks_parameters(synthetic):
+    """Pre-fit diagnostic must agree with the post-fit Jacobian diagnosis.
+
+    Sensitivity is measured as mean |d ln Id / d ln p|, so it is directly
+    comparable across parameters with different units.
+    """
+    sens = sensitivity_report(DEFAULT, synthetic)
+    assert sens["kp"] > 0.5  # strongly sensed
+    assert sens["vthk"] < 1e-3  # ~2000x weaker than kp
+    assert sens["vthk"] < 1e-3 * sens["kp"]
+    # weakly sensed parameters must be the ones with the biggest error bars
+    ident = identifiability(fit(synthetic))
+    weakest = min(sens, key=sens.get)
+    assert ident.sigma_rel[weakest] > ident.sigma_rel["vth0"]
+
+
+def test_theta_vsat_correlation_is_reported(synthetic):
+    """theta and vsat both flatten the knee; output curves alone cannot separate
+    them, so the report must surface the pairing."""
+    ident = identifiability(fit(synthetic))
+    pairs = {(a, b) for a, b, _ in ident.worst_pairs}
+    assert ("theta", "vsat") in pairs
+    # and both carry large individual error bars as a consequence
+    assert ident.sigma_rel["theta"] > 1.0
+
+
+def test_curveset_validation():
+    with pytest.raises(ValueError):
+        CurveSet(np.zeros(3), np.zeros(2), np.zeros(3))
+
+
+def test_example_dataset_is_usable():
+    d = example_dataset()
+    assert len(d) == 25 * 8
+    assert len(d.vgs_grid()) == 25
+    assert len(d.vds_grid()) == 8

@@ -1,0 +1,25 @@
+# Environments
+.venv/
+venv/
+.python-version
+
+# Bytecode / packaging
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Generated artifacts
+out/
+*.png
+!docs/**/*.png
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+Thumbs.db
+.DS_Store
