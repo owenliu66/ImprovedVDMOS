@@ -51,6 +51,7 @@ class MarkerLayer:
         self.selected: int | None = None
         self._lock: str | None = None
         self._drag: int | None = None
+        self._input_enabled = True
         self._lines: list[Line2D] = []
         self._labels = []
 
@@ -61,6 +62,14 @@ class MarkerLayer:
         canvas.mpl_connect("key_release_event", self._on_key_release)
 
     # ------------------------------------------------------------- geometry
+    def set_input_enabled(self, enabled: bool) -> None:
+        """Ignore add/drag mouse events while another mode owns the plot.
+
+        Used by two-point calibration: an empty click must place a calibration
+        point, never a marker.
+        """
+        self._input_enabled = bool(enabled)
+
     def limits(self) -> tuple[float, float, float, float]:
         x0, x1 = self.ax.get_xlim()
         y0, y1 = self.ax.get_ylim()  # y is inverted: y0 = H (bottom), y1 = 0 (top)
@@ -177,6 +186,8 @@ class MarkerLayer:
         return best
 
     def _on_press(self, event: MouseEvent) -> None:
+        if not self._input_enabled:
+            return
         if event.inaxes is not self.ax or event.button != 1:
             return
         hit = self._hit_marker(event)
@@ -191,7 +202,7 @@ class MarkerLayer:
             self.canvas.draw_idle()
 
     def _on_motion(self, event: MouseEvent) -> None:
-        if self._drag is None or event.inaxes is not self.ax:
+        if not self._input_enabled or self._drag is None or event.inaxes is not self.ax:
             return
         index = self._drag
         marker = self.markers[index]

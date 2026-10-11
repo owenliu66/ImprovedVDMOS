@@ -40,8 +40,10 @@ class GridState:
     color: str = "#3b7dd8"
     alpha: float = 0.55
     width: float = 0.7
-    minor_subdivisions: int = 5
-    log_minor: str = "2..9"
+    x_minor_divisions: int = 5
+    y_minor_divisions: int = 5
+    x_log_minor: str = "2..9"
+    y_log_minor: str = "2..9"
     x_interval: float | None = field(default=None)
     y_interval: float | None = field(default=None)
 
@@ -58,9 +60,12 @@ def apply_axes(
     """
     majors_x = xform_x.major_ticks(grid.x_interval)
     majors_y = xform_y.major_ticks(grid.y_interval)
-    log_mantissas = LOG_MINOR_PRESETS.get(grid.log_minor, ())
-    minors_x = xform_x.minor_ticks(majors_x, grid.minor_subdivisions, log_mantissas)
-    minors_y = xform_y.minor_ticks(majors_y, grid.minor_subdivisions, log_mantissas)
+    minors_x = xform_x.minor_ticks(
+        majors_x, grid.x_minor_divisions, LOG_MINOR_PRESETS.get(grid.x_log_minor, ())
+    )
+    minors_y = xform_y.minor_ticks(
+        majors_y, grid.y_minor_divisions, LOG_MINOR_PRESETS.get(grid.y_log_minor, ())
+    )
 
     pix_x = [xform_x.to_pix(v) for v in majors_x]
     pix_y = [xform_y.to_pix(v) for v in majors_y]

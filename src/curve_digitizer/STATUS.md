@@ -1,27 +1,30 @@
 # Curve Digitizer — Status
 
-*Snapshot date: 2026-10-11. Companion to [README.md](README.md); the project-level
-status lives in [../../STATUS.md](../../STATUS.md).*
+*Snapshot date: 2026-10-11; updated with two-point calibration and per-axis minor
+ticks. Companion to [README.md](README.md); the project-level status lives in
+[../../STATUS.md](../../STATUS.md).*
 
 ## What exists
 
 ```
-src/curve_digitizer/        1,698 lines of Python, 11 modules
+src/curve_digitizer/        2,312 lines of Python, 13 modules
 ├── __init__.py       (13)  package exports, `python -m curve_digitizer`
 ├── __main__.py        (4)  entry point
 ├── app.py           (205)  main Tk window: PDF load, page nav, crop DPI, rubber-band region select
 ├── pdf_source.py     (61)  PyMuPDF page/region rendering (region re-rendered, not cropped)
-├── transform.py     (162)  AxisTransform: pixel <-> data, linear/log, tick generation
-├── grid.py          (112)  adjustable Cartesian grid overlay derived from the transform
+├── transform.py     (182)  AxisTransform: pixel <-> data, linear/log, tick generation, from_points
+├── grid.py          (117)  adjustable Cartesian grid overlay derived from the transform
 ├── snapping.py      (325)  dark-pixel mask -> skeleton -> sub-pixel centerline cloud -> KDTree
-├── markers.py       (224)  add/drag/select/delete, X/Y key axis-lock, marker artists
-├── digitizer_window.py (380) pop-up: plot, axis panel, grid panel, snap controls, Export
+├── corners.py       (323)  90-degree tick/axis corner detection for calibration clicks (own mask)
+├── calibration.py   (160)  click-two-points state machine: arming, crosshair artists, validation
+├── markers.py       (235)  add/drag/select/delete, X/Y key axis-lock, marker artists, input gate
+├── digitizer_window.py (475) pop-up: plot, axis panel, grid panel, snap controls, Export
 ├── table.py         (173)  Index|X|Y|Condition Treeview, in-place cell editing, 2-way sync
 └── export.py         (39)  CSV via native Save As, default `Projects/ImprovedVDMOS/data`
+tests/test_digitizer.py (350)  corner snapping, anchored transforms, per-axis minors, headless Tk
 ```
 
-Not yet committed — `git status` shows `?? src/curve_digitizer/`. Runtime dependencies
-are declared in `pyproject.toml` as the `digitizer` extra
+Runtime dependencies are declared in `pyproject.toml` as the `digitizer` extra
 (`pip install -e .[digitizer]`: `pymupdf>=1.24`, `scikit-image>=0.22`), and the
 console script `curve-digitizer` is registered alongside `vdmos-fit`.
 
@@ -34,10 +37,31 @@ console script `curve-digitizer` is registered alongside `vdmos-fit`.
   (`imshow(extent=(0, W, H, 0))`); datasheet units exist only in tick labels, the
   table and the CSV. A log axis is mapped as pixels → `log10(data)`, so a printed
   log axis is never geometrically distorted.
-- **Axes** — X/Y min and max entered at the crop edges, tick interval (data step,
-  or decade step on log), linear/log per axis.
-- **Grid overlay** — major/minor, style, colour, alpha, linear minor subdivisions,
-  log minor mantissas; re-derived from the axis transform on every calibration change.
+- **Calibration** — pixel anchors of the two typed values are stored per axis
+  (`x_anchors`/`y_anchors`); the default is the crop-edge pair, preserving the
+  original edge-based workflow. **Calibrate X/Y** arms a two-point mode: click
+  the two printed ticks (only the along-axis coordinate is used; click order is
+  directional so reversed axes work; Esc or re-pressing the button cancels;
+  clicks closer than 5 px are rejected). `AxisTransform.from_points` builds the
+  map; for log axes the two points fix decade scale and offset. `_apply_axes`
+  always rebuilds from anchors + typed values, so "Apply grid" cannot silently
+  discard a calibration. Markers are pixel-anchored: recalibrating re-values
+  table/CSV without moving markers.
+- **Corner snapping for calibration clicks** — `corners.py` snaps each click to
+  the vertex where a tick stroke crosses the axis line: longest-horizontal-run
+  axis band, connected components touching it, covariance principal direction
+  within 12° of perpendicular (rejects shallow curve crossings, arrowheads,
+  text), grayscale threshold-crossing interpolation for sub-pixel centres in the
+  `imshow` display convention (pixel `j` spans `[j, j+1]`). Fallbacks: lone
+  perpendicular stroke → snap the along-axis coordinate only; no ink → raw
+  click. Toggleable via *snap clicks to tick corners*. Its mask is deliberately
+  separate from the snapper's (frames/ticks must survive) but shares the
+  dark-threshold slider.
+- **Axes** — values at the two anchor points (or crop edges), tick interval
+  (data step, or decade step on log), linear/log per axis.
+- **Grid overlay** — major/minor, style, colour, alpha, **per-axis** minor
+  subdivisions and **per-axis** log minor mantissas; re-derived from the axis
+  transform on every calibration change.
 - **Snapping** — centerline projection (skeleton + chord refinement along the
   structure-tensor normal), toggleable; radius and dark-threshold adjustable;
   *show curve mask* and *ignore printed grid/axes* diagnostics.
@@ -48,11 +72,23 @@ console script `curve-digitizer` is registered alongside `vdmos-fit`.
 - **Export** — native Save As, default folder `Projects/ImprovedVDMOS/data`,
   written as `index,x,y,condition` in datasheet units.
 
-## Verified state (2026-10-11)
+## Verified state (2026-10-11, calibration update)
 
-- **`ruff check src/curve_digitizer` → clean** (the `I001` import-order error
-  introduced with the `tkfont` import is fixed).
-- All modules compile; `import curve_digitizer` resolves with `PYTHONPATH=src`.
+- **`ruff check src tests` → clean** for all digitizer code (the pre-existing
+  `F401` unused `math` import in `tests/test_fit.py` predates this work).
+- **`pytest` → 64 passed, 1 skipped** (the skip is pre-existing). New
+  `tests/test_digitizer.py` (26 tests) covers:
+  - corner vertex accuracy **exact to <0.05 px** on synthetic printed sheets for
+    1/2/3 px line and tick thicknesses, in the display convention;
+  - the 90° test rejects a 70° decoy and a shallow curve crossing the frame;
+  - lone-tick fallback (frame cropped out) and no-ink raw fallback;
+  - `from_points` round-trips linear/log, directional click order, identical-pixel
+    rejection, and edge calibration as the exact special case of two points;
+  - per-axis minor divisions (2 vs 5) and per-axis log mantissas (2,5 vs 2..9);
+  - headless Tk: anchors replaced by clicked pixels, stray clicks while armed
+    create no marker, Esc/button-toggle cancel, too-close pair rejected,
+    "Apply axes" clears the green marks but keeps the anchors, and a marker
+    placed after calibration reads exactly 20 A at the pixel midpoint.
 - **Snapping accuracy** (synthetic datasheet PDFs, measured):
   - horizontal traces **1–9 px wide: 0.000 px** centerline error — thickness-independent,
     which was the explicit thick-line requirement;
@@ -79,30 +115,32 @@ console script `curve-digitizer` is registered alongside `vdmos-fit`.
 | 6 | Window taller than the screen | canvas requests `figsize × dpi`, so a big crop pushed the table off-screen | figure capped to 900×470 px from the crop aspect; `_fit_to_screen()` clamps to 94 % of the screen |
 | 7 | Row text clipped vertically | `height=` sets row *count*; the style's `rowheight` default is below the font's line height at scaled DPI | `rowheight = linespace × 1.45` (min 24 px), DPI-aware |
 | 8 | Cell text white on white, readable only when selected | a **derived** ttk style name (`Digitizer.Treeview`) keeps the layout but loses the theme's per-state colours under `vista` | configure the theme's own `Treeview` / `Treeview.Heading` and `style.map` the selected state |
+| 9 | Corner vertex off by 0.75 px on even-width bands | the first corner refinement marched the **binary** mask mixing pixel-centre and pixel-edge sampling conventions | measure band centres from **grayscale threshold-crossing interpolation** in the `imshow` display convention (pixel `j` spans `[j, j+1]`) |
+| 10 | A 70° decoy stroke accepted as a tick | strokes were grouped per **column**, so each 1-px column of a diagonal looked vertical | strokes are connected **components** of the mask minus the axis band; direction is the covariance principal axis of the whole stroke |
 
 ## Known weak spots
 
-1. **Calibration is edge-based.** X/Y min-max are assumed to sit exactly at the crop
-   edges, so the box must be drawn on the axis extremes. A box that includes the tick
-   labels or axis frame is mis-calibrated. There is no click-two-points-to-calibrate yet.
-2. **Dark-on-light only.** The mask is a luminance threshold; coloured or inverted
+1. **Dark-on-light only.** The mask is a luminance threshold; coloured or inverted
    (white-on-black) datasheets need snapping off, or a threshold change. No hue/colour
-   segmentation, so overlapping multi-colour traces are one blob.
-3. **Log axes cannot show zero.** `AxisTransform` requires strictly positive min/max,
+   segmentation, so overlapping multi-colour traces are one blob. This applies to the
+   corner detector's mask as well.
+2. **Log axes cannot show zero.** `AxisTransform` requires strictly positive min/max,
    which is correct mathematically but means a datasheet `I_ds` axis labelled from 0
    must be entered as linear or with a small positive floor.
-4. **Suppression constants are hard-coded** (`span_frac = 0.97`, `max_thickness = 3`);
-   only the on/off switch is exposed.
-5. **No undo/redo, no autosave, no marker-set persistence.** Closing a pop-up discards
+3. **Suppression and corner constants are hard-coded** (`span_frac = 0.97`,
+   `max_thickness = 3`; `WINDOW_RADIUS = 14`, `ANGLE_TOL_DEG = 12`, …); only the
+   on/off switches are exposed.
+4. **No undo/redo, no autosave, no marker-set persistence.** Closing a pop-up discards
    the markers; there is no re-import of a previously exported CSV.
-6. **No committed tests.** All verification above was done with ad-hoc headless scripts
-   (Tk driven without `mainloop`, `ImageGrab` screenshots); nothing lives in `tests/`.
+5. **No rotation/skew correction.** Two points per axis assume the crop is
+   axis-parallel; a skewed crop needs a 4-point affine calibration (explicitly
+   out of scope by decision).
 
 ## Suggested next steps
 
-1. Click-two-ticks calibration (pick the two points that define each axis) instead of
-   assuming the crop edges are the axis extremes.
-2. `tests/test_digitizer.py` covering `AxisTransform` round-trips, tick/minor generation
-   and the snapper's centerline accuracy on synthetic traces.
-3. Series grouping: `Condition` → per-`Vgs` blocks or long-format CSV for `vdmos_fit`.
-4. Pan/zoom for large crops, and undo/redo for marker edits.
+1. Series grouping: `Condition` → per-`Vgs` blocks or long-format CSV for `vdmos_fit`.
+2. Pan/zoom for large crops, and undo/redo for marker edits.
+3. Extend `tests/test_digitizer.py` to the snapper's centerline accuracy on
+   synthetic traces (the ad-hoc measurements from 2026-10-11 are not yet encoded).
+4. Optional: snap calibration clicks to gridline/axis-frame junctions when the
+   tick itself is degraded.

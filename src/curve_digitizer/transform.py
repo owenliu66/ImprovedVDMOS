@@ -74,6 +74,26 @@ class AxisTransform:
         self._log_lo = math.log10(self.lo) if self.lo > 0 else None
         self._log_hi = math.log10(self.hi) if self.hi > 0 else None
 
+    @classmethod
+    def from_points(
+        cls,
+        pix1: float,
+        pix2: float,
+        data1: float,
+        data2: float,
+        scale: str = LINEAR,
+    ) -> AxisTransform:
+        """Build the map from two clicked pixels and their known data values.
+
+        Directional: ``pix1`` carries ``data1`` and ``pix2`` carries ``data2``,
+        so clicking the ticks in reverse order simply reverses the axis.  For a
+        log axis the two points fix the decade scale and offset, which is
+        exactly the pixels -> ``log10(data)`` law implemented below.
+        """
+        if pix1 == pix2:
+            raise ValueError("the two calibration points are at the same pixel")
+        return cls(pix1, pix2, data1, data2, scale)
+
     # ------------------------------------------------------------------ maps
     def to_data(self, pix: float) -> float:
         t = (pix - self.pix_lo) / (self.pix_hi - self.pix_lo)
