@@ -15,9 +15,15 @@ dev = [
     "pytest>=8",
     "ruff>=0.4",
 ]
+digitizer = [
+    # curve_digitizer: PDF rendering and curve skeletonization
+    "pymupdf>=1.24",
+    "scikit-image>=0.22",
+]
 
 [project.scripts]
 vdmos-fit = "vdmos_fit.cli:main"
+curve-digitizer = "curve_digitizer.app:main"
 
 [build-system]
 requires = ["setuptools>=68"]
