@@ -35,12 +35,15 @@ Projects/ImprovedVDMOS/
 - **Plots** — output curves, transfer curves, gds across knee, fit-vs-data
   overlay, and `mtriode_shape()` reproducing the LTspice mtriode sweep figure.
 - **CLI** — `vdmos-fit check | fit <csv> | demo`, plus `python -m vdmos_fit`.
+  Shared flags (`--show`, `--out`/`-o`) parse before *or* after the subcommand
+  (fixed 2026-10-11 via a SUPPRESS-default parent parser; `-o` alias added to
+  match the documented usage). Pinned by `tests/test_cli.py`.
 
 ## Verified state
 
-- **31 tests passed** (verified 2026-10-11 run, including the new
-  `test_matched_ron_square_law_overprediction` regression and the tightened
-  alpha pin).
+- **39 tests passed** (verified 2026-10-11 run, including the new
+  `test_matched_ron_square_law_overprediction` regression, the tightened alpha
+  pin, and 8 CLI parser tests).
 - **`ruff check` still reports 1 error**: unused `import math` in
   `tests/test_fit.py:5`. The `E501` and `E731` issues are resolved.
 - Round-trip fit recovers kp/vth0/vsat/eta/lam/gk within ~1 %, relative RMSE

@@ -5,6 +5,9 @@ Usage
     vdmos-fit check                       # model sanity checks + plots
     vdmos-fit fit data.csv -o out/        # extract parameters from a CSV
     vdmos-fit demo                        # synthetic round-trip demo
+
+The shared flags (--show, --out/-o) may appear before OR after the subcommand:
+`vdmos-fit --out x check` and `vdmos-fit check --out x` are equivalent.
 """
 
 from __future__ import annotations
@@ -94,22 +97,36 @@ def cmd_demo(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="vdmos-fit", description=__doc__)
     ap.add_argument("--show", action="store_true", help="open interactive plots")
-    ap.add_argument("--out", default="out", help="output directory (default: out/)")
+    ap.add_argument("-o", "--out", default="out", help="output directory (default: out/)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("check", help="model sanity checks + reference plots")
+    # Shared flags repeated on every subcommand so they parse in either position.
+    # SUPPRESS defaults are essential: without them the subparser would reset
+    # --out/--show to their defaults and clobber a value already parsed before
+    # the subcommand (argparse fills subparser defaults into the namespace
+    # unconditionally).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--show", action="store_true", default=argparse.SUPPRESS,
+                        help="open interactive plots")
+    common.add_argument("-o", "--out", default=argparse.SUPPRESS,
+                        help="output directory (default: out/)")
 
-    fp = sub.add_parser("fit", help="extract parameters from a measured CSV")
+    sub.add_parser("check", parents=[common], help="model sanity checks + reference plots")
+
+    fp = sub.add_parser("fit", parents=[common], help="extract parameters from a measured CSV")
     fp.add_argument("csv", help="CSV with columns vgs,vds,ids")
     fp.add_argument("--weight", choices=("relative", "abs"), default="relative")
     fp.add_argument("-v", "--verbose", action="store_true")
 
-    sub.add_parser("demo", help="synthetic round-trip fit")
+    sub.add_parser("demo", parents=[common], help="synthetic round-trip fit")
+    return ap
 
-    args = ap.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
     return {"check": cmd_check, "fit": cmd_fit, "demo": cmd_demo}[args.cmd](args)
 
 
