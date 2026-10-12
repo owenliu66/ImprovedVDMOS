@@ -1,8 +1,29 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot date: 2026-10-11 (blocking problems 1–2 resolved); sessions 4–5 cap
-section and session 7 gds-deletion section appended. Companion to
-[README.md](README.md).*
+*Snapshot: 2026-10-11 (session 8). Companion to [README.md](../../README.md).*
+
+## Current state
+
+Eight sessions, all committed to `main`. The package provides one C¹ continuous
+drain-current model — softplus subthreshold, gate-overdrive charge cap (kcap, m),
+mobility degradation via Vk, velocity saturation, bounded DIBL, gated CLM,
+one-sided trench kink — embedded with package series resistance rd/rs (implicit
+external-node solve with a Newton stall guard, LTspice Rd/Rs semantics,
+Vds ≥ 0 only), plus bounded least-squares extraction with identifiability
+diagnostics. Along the way the project's Level-1 reference was corrected (knee
+at `Vov/mtriode`, verified against LTspice 26.0.1 — the earlier NDR/continuity
+alarms were a bug in that reference, not in Level-1), and two mechanisms were
+added then deleted as unsupported by the data: `kappa` (a drain-bias-dependent
+series resistance that was a voltage divider, not a charge limit; replaced by
+the cap) and a `gds·Vds` drift leak (a one-point parameter that flattened the
+subthreshold curve to a gate-independent floor; the off state is now the
+gate-dependent softplus floor). Diagnostics were hardened to match what the
+data can actually support: dead Jacobian columns report σ = inf rather than a
+confident small σ, and `on_bounds` flags pinned parameters relative to the
+bound's magnitude, not the search-box width. Current fit on ST8L65N044M9:
+**5.54 % relative RMSE (fit B), rank 9/9, cond 3.75e4, ksub live**, the
+Vgs(th) spec point reproduced exactly by the channel. 89 tests green, ruff
+clean. Datasheet Figure 3 (typical output curves) is on disk in `data/`.
 
 ## What exists
 
@@ -16,6 +37,7 @@ Projects/ImprovedVDMOS/
 │                           test_cli, test_digitizer
 ├── scripts/                fit_datasheet.py, fit_st8l65.py, roundtrip_demo.py
 ├── data/                   README.md + ST8L65N044M9_IV.csv (41 digitised points)
+│                           + ST8L65N044M9_Id_Vds_Vgs.png (datasheet Figure 3)
 └── notebooks/              README.md only (empty)
 ```
 
@@ -23,188 +45,55 @@ Projects/ImprovedVDMOS/
 
 - **Model** — `vdmos_id()` evaluates the unified continuous drain current
   (softplus subthreshold, gate-overdrive charge cap kcap/m, mobility
-  degradation via Vk, velocity saturation, DIBL, gated CLM,
-  one-sided kink sigmoid), embedded with package series resistance rd/rs
-  (implicit external-node solve with stall guard, LTspice Rd/Rs semantics;
-  Vds ≥ 0 only). No drift-leakage term (gds deleted, session 7): the off
-  state is the gate-dependent softplus floor. `vdmos_id_level1()` is now
-  the **correct** LTspice reference with knee at `Vov/mtriode` and takes
-  the same rd/rs embedding for fair A/B.
+  degradation via Vk, velocity saturation, DIBL, gated CLM, one-sided kink
+  sigmoid), embedded with package series resistance rd/rs. No drift-leakage
+  term: the off state is the gate-dependent softplus floor.
+  `vdmos_id_level1()` is the **correct** LTspice reference with knee at
+  `Vov/mtriode` and takes the same rd/rs embedding for fair A/B.
 - **Extraction** — `fit()` runs bounded `least_squares` with positive
   parameters in log space; two-stage relative→ampere weighting is wired into
   `scripts/fit_datasheet.py`.
 - **Diagnostics** — `sensitivity_report()` (pre-fit, mean |d ln Id/d ln p|) and
   `identifiability()` (post-fit: Jacobian rank, condition number,
   per-parameter σ, correlated pairs). Zero-sensitivity columns report `inf`,
-  not 0.
+  not 0. `FitResult.on_bounds()` flags bound-pinned parameters.
 - **Data I/O** — flat `CurveSet` (vgs, vds, ids), CSV load/save, synthetic
   generator for round-trip validation.
 - **Plots** — output curves, transfer curves, gds across knee, fit-vs-data
   overlay, and `mtriode_shape()` reproducing the LTspice mtriode sweep figure.
 - **CLI** — `vdmos-fit check | fit <csv> | demo`, plus `python -m vdmos_fit`.
-  Shared flags (`--show`, `--out`/`-o`) parse before *or* after the subcommand
-  (fixed 2026-10-11 via a SUPPRESS-default parent parser; `-o` alias added to
-  match the documented usage). Pinned by `tests/test_cli.py`.
+  Shared flags (`--show`, `--out`/`-o`) parse before *or* after the subcommand.
+  Pinned by `tests/test_cli.py`.
 
 ## Verified state
 
-- **87 tests, all passing** (verified 2026-10-11 after the gds deletion;
-  `ruff check` clean). Caveat: 8 of the digitizer window tests drive Tk and
-  self-skip when the subprocess has no display — in headless runs 0–2 of them
-  skip (flaky per-process), so "N passed, M skipped" totals vary; the count
-  grew 86 → 87 with session 7's renamed off-state tests netting one new test.
-- All pre-package-R anchors unchanged (rd = rs = 0 fast path is bit-identical);
-  all pre-cap anchors unchanged (kcap = 0 is the exact identity, pinned by
-  `tests/test_gate_cap.py`):
+- **89 tests, all passing**; `ruff check` clean. Caveat: 8 of the digitizer
+  window tests drive Tk and self-skip when the process has no display — in
+  headless runs 0–2 of them skip (flaky per-process), so "N passed, M skipped"
+  totals vary; don't pin the count.
+- All model anchors hold (rd = rs = 0 and kcap = 0 fast paths are
+  bit-identical to the pre-package-R / pre-cap model):
   Ron 4.27 mΩ, saturation table 31.5/91.0/157.1/225.9/297.7 A, α = 1.08,
-  Level-1 reference 960.4 A at Vgs = 10/Vds = 20.
-- Round-trip fit recovers kp/vth0/vsat/eta/lam/gk within ~1 %, relative RMSE
-  0.86 %.
+  Level-1 reference 960.4 A at Vgs = 10/Vds = 20, Level-1 C¹ continuity,
+  matched-Ron over-prediction 4.25×/4.80×/5.33× at Vgs 10/11/12.
 - Corrected Level-1 matches LTspice 26.0.1 `.meas` exactly: Id = 4.000000 A
   either side of the knee for m = 1, 2, 4; min gds ≥ 0; Ron conductance =
   m·Kp·Vov; Id,sat independent of mtriode.
+- Synthetic round trips recover kp/vth0/vsat/eta/lam/gk within ~1 %
+  (relative RMSE 0.86 %) and rd+rs to 0.3 % (individually −6.5 %/+14 %,
+  rd ↔ rs correlation −0.999 — only the sum is pinned by static data).
+- Package-R solver matches independent `brentq` roots to 3e-16 relative;
+  grid self-consistency residual < 1e-8 relative, or < 1e-12 A absolute at
+  the subthreshold floor (solver atol).
 
-## Problems to fix
+## Current ST8L65 fit (official, 9-param, gds-free)
 
-### Blocking / correctness — both resolved 2026-10-11
-
-1. **"4–5× over-prediction" claim re-measured against the corrected Level-1.
-   RESOLVED — the number survived.** Measured: **4.25× at Vgs = 10 V, 4.80× at
-   11 V, 5.33× at 12 V** (Vds = 20 V; Level-1 defaults kp = 28, mtriode = 1.2,
-   λ = 0.02 vs improved DEFAULT). "Matched Ron" needs no kp rescaling: the two
-   Ron values agree within 0.15% at Vds = 50 mV across 10–12 V. The knee bug
-   never entered this ratio — at Vds = 20 V (≫ Vov/m) both the old (knee = Vov)
-   and corrected (knee = Vov/m) references evaluate the identical saturation
-   branch ½·Kp·Vov²(1+λVds), and Ron = 1/(m·Kp·Vov) is the same in both. The
-   earlier suspicion that the number would change was itself wrong; it was the
-   gds/continuity claims that the bug corrupted. README updated to the precise
-   "4.3× → 5.3×"; pinned by `test_matched_ron_square_law_overprediction`.
-2. **DEFAULT re-derived. RESOLVED — parameters verified, not changed.**
-   α = **1.078** over Vgs 6–12 V (1.098 over 10–12 V) for the current DEFAULT —
-   README's "α ≈ 1.08" confirmed and now pinned to ±0.01 by
-   `test_saturation_exponent_below_two`. Saturation table (31.5/91.0/157.1/
-   225.9/297.7 A) and the 4.27 mΩ Ron anchor re-checked and current. DEFAULT is
-   safe to keep because its only external anchor (LTspice A/B Ron at Vgs = 10)
-   lives in the ohmic limit, where the knee bug had no effect. Tunability
-   verified: α = 1.21 (vsat = 3 V), 1.32 (vsat = 5 V), 1.50 (vsat = 12 V), θ
-   secondary. **Flag:** DEFAULT's α = 1.08 sits *below* the physical 1.2–1.6
-   band; recalibrate vsat ≈ 3–5 V when real datasheet data arrives (problem 6).
-
-### Known weak spots (measured, not guessed)
-
-3. `theta` and `vsat` are **84 % correlated** (σ ≈ 9.7 and 0.69) — output
-   curves alone cannot separate them.
-4. `vthk` is barely sensed (σ ≈ 477 %, sensitivity ~2000× below kp) because
-   `kk = 0.1 V` saturates the kink sigmoid above Vgs = 2 V. Needs dense Vgs
-   points through the kink, or fix it from measurement.
-5. **`gds` σ ≈ 455 %. RESOLVED (session 7) — the term is deleted, not
-   re-measured.** See "gds leak term deleted" below; the off-state anchor it
-   faked is now carried physically by ksub/vth0.
-
-### Missing
-
-6. **Real datasheet data. RESOLVED (session 4)** — `data/ST8L65N044M9_IV.csv`:
-   41 digitised points from the ST8L65N044M9 (650 V super-junction, 36–44 mΩ)
-   datasheet, 25 °C pulsed, Vds 0–20 V, Vgs 3.7–10 V, including the Vgs(th)
-   and Rds(on) spec anchors. Provenance and the removed 650 V off-state point
-   documented in `data/README.md`. First fits: see the cap section below.
-7. No Q(V) charge model, no body diode, no thermal node, no `Tj` — the rest of
-   the agreed architecture. The body diode is now the **biggest model hole**:
-   the package-R path is Vds ≥ 0 only and reverse operation is undefined.
-8. No LTspice export path: fitted parameters cannot yet be written back as a
-   `.subckt`/`.model` for A/B simulation.
-9. No CI. (The git repo now exists — `main` tracking `origin/main`.)
-10. `notebooks/` is empty scaffolding.
-
-## Key corrections made this session
-
-| Claim | Before | After (LTspice-verified) |
-|---|---|---|
-| Level-1 knee location | `Vds = Vov` | `Vds = Vov / mtriode` |
-| Level-1 continuity | "gds jump ~+400 %, −40 S NDR dip" | **C1 continuous for any mtriode**; artifacts were a bug in the project's own reference formula |
-| Kink gate | bare `tanh((Vgs−Vthk)/kk)` (odd → negative off-state current) | one-sided `0.5·(1+tanh(…))` |
-| Level-1 limit of improved model | "strict superset, exact" | smooth approximation: exact in ohmic + deep saturation, ~6 % low at the knee |
-| `parameter_uncertainty` | zero Jacobian column → σ = 0 ("perfectly determined") | `identifiability()` → σ = `inf` ("NOT SENSED"), rank/cond/correlations |
-
-## Package resistance added (rd, rs) — 2026 session 2
-
-- **Embedding:** `Vds' = Vds − (rd+rs)·Id`, `Vgs' = Vgs − rs·Id`, implicit per
-  point; shared bracketed safeguarded-Newton solver in `model.py`
-  (`_solve_package_r`), used by both `vdmos_id` and `vdmos_id_level1`.
-  Fixed-point iteration deliberately avoided: contraction factor
-  (rd+rs)·kp·Vov ≈ 1.6 > 1 in the ohmic region for DEFAULT.
-- **Fitted by default** (`DEFAULT_FREE` + 2), linear space, bounds [0, 0.5] Ω —
-  datasheet Rds(on) is 2-terminal and already contains rd+rs.
-- **Measured properties (pinned by `tests/test_package_r.py`):**
-  - Solver matches independent `brentq` roots to 3e-16 relative; grid
-    self-consistency residual < 1e-8 relative, or < 1e-12 A absolute at the
-    subthreshold floor (solver atol; session 7 mixed rule).
-  - Synthetic round trip (truth rd = 2 mΩ, rs = 1 mΩ): rd+rs recovered to
-    0.3 %, individually −6.5 % / +14 %; identifiability reports
-    **rd ↔ rs = −0.999** — only the sum is strongly pinned by static data.
-  - Off state (session 7): Id at (Vds, Vgs) = (20, 0) is the gate-dependent
-    softplus channel floor (~1e-13 A), solved self-consistently through the
-    package R — the old exactness identity `Id = gds·Vds/(1 + gds·(rd+rs))`
-    died with the gds term (`test_off_state_solves_to_channel_floor`).
-  - Terminal Ron = intrinsic + rd + rs to within ~70 µΩ (chord-resistance
-    curvature at the shifted internal Vds accounts for the residual).
-  - When truth rd = rs = 0, the free rd/rs columns are near-parallel →
-    identifiability cond rises 1e4 → 1.4e4 (test threshold raised to 1e5);
-    the theta↔vsat > 0.8 pair drops out of `worst_pairs` with 11 free params
-    (test now evaluates it on the legacy 9-param set).
-- **Scope guard:** package-R path raises `ValueError` for Vds < 0. Discovered
-  while testing: the *intrinsic* channel model is itself undefined in reverse
-  (velocity-saturation divisor 1 + v/vsat singular near Vds ≈ −vsat; e.g.
-  f(−20, 10) = +1038 A garbage). Body diode (problem 7) must define reverse
-  operation; the fast path's finiteness sweep (`test_no_nan_or_inf_anywhere`)
-  does not imply a valid reverse characteristic.
-- `sensitivity_report` now probes bound-anchored parameters (rd/rs at 0)
-  one-sided; the log-space formula is meaningless at p = 0 and a two-sided
-  probe would request negative resistance.
-
-## Gate-overdrive cap (kcap, m) — sessions 4+5
-
-**Why.** The ST8L65N044M9 datasheet curves show a bimodal gate exponent
-α = d ln Id/d ln Vov: **1.68 / 1.61 / 1.00 / 0.16 / 0.07** across
-Vgs 5→6→7→8→9→10 at the top of each curve. No setting of θ/vsat/λ drops α by
-an order of magnitude. Mechanism: finite free charge in the lightly doped SJ
-pillars → soft cap on the effective gate overdrive,
-`Vov_eff = Vov/(1 + (Vov/kcap)^m)^(1/m)`, applied **before Vk** (variant A:
-charge and knee saturate together). `kcap = 0` is the exact identity (every
-pre-cap anchor bit-identical); `0 ≤ dVov_eff/dVov ≤ 1` preserves the
-package-R bracket invariant `dg/dId ≤ −1`.
-
-**`kappa` deleted.** The previous mechanism (drain-bias-dependent series
-resistance) was a voltage divider, not a charge limit: the fit made rd carry
-75 % of the terminal voltage already at the Ron anchor (Vds = 0.483 V,
-Id = 14 A). Cap beats kappa: **6.88 % vs 7.45 %** RMSE (session 4,
-unconstrained lam), full Jacobian rank, ~1000× better conditioning.
-
-**Solver stall guard.** With the cap, `rs·Id` can drag the internal gate
-across the cap knee and make `g(Id)` flat-then-cliff: bracketed Newton
-two-cycles between the flat shoulders (measured at Vds ≈ 178 V with fitted
-params, rd = 26 mΩ) and failed at 60 iterations. A per-point stall counter
-vetoes Newton after three consecutive <10 % bracket shrinks and forces
-bisection. Changes no converged result; `test_no_ndr_with_fitted_cap` fails
-without it, and `test_solver_survives_newton_two_cycle` pins it directly.
-
-**Identifiability fix (`fit.py`).** The dead-column test is now RELATIVE to
-the strongest Jacobian column (1e-5 of max), not absolute 1e-10×max, and
-correlations/cond are computed over live columns only. On the ST8L65 fit the
-ksub column measured 7.8e-7 of max — provably dead (pinning ksub at
-0.007–0.09 V leaves RMSE and all other parameters identical) — yet the old
-test called it live, reported a confident small σ, and manufactured the
-ksub↔vk = +1.000 pair plus ~3 decades of cond inflation. Pinned by
-`test_dead_parameter_reports_inf_not_a_small_sigma`.
-
-**Fits (`scripts/fit_st8l65.py`; outputs `out/st8l65_capfit.png`,
-`out/st8l65_capfit_params.txt`).** Official table = the session-7 9-param
-run (gds deleted). Free = kp, vth0, ksub, lam, rd, rs, vk, kcap, m; fixed
-θ = 0, vsat = 1e4, η = 0, gk = 0, vthk = 1.6, kk = 0.1 (measured dead on
-this data); device bounds rd, rs ≤ 36 mΩ (datasheet Rds(on)) and
-lam ≤ 0.004 1/V. Four multi-starts, all converge to the same basin in BOTH
-fits (the cap + capped lam made the landscape tame). The session-4/5
-10-param (with-gds) table is superseded and lives in git history.
+`scripts/fit_st8l65.py`; outputs `out/st8l65_capfit.png`,
+`out/st8l65_capfit_params.txt`. Free = kp, vth0, ksub, lam, rd, rs, vk,
+kcap, m; fixed θ = 0, vsat = 1e4, η = 0, gk = 0, vthk = 1.6, kk = 0.1
+(measured dead on this data); device bounds rd, rs ≤ 36 mΩ (datasheet
+Rds(on)) and lam ≤ 0.004 1/V. Four multi-starts, all converge to the same
+basin in both fits.
 
 | | fit A (full, 41 pts) | fit B (no Vgs=5, 36 pts) |
 |---|---|---|
@@ -224,95 +113,45 @@ fits (the cap + capped lam made the landscape tame). The session-4/5
 | rank / cond | **8/9** / 2.9e4 | **9/9** / 3.75e4 |
 | Vgs≥6 only | 5.83 % | 5.62 % |
 
-**Open problems from these fits (replace the session-4 list):**
+Fit B is the fair model-quality number: the Vgs = 5 curve is genuine
+datasheet data but unreproducible by any C¹ model (identical Id at
+Vds = 1.127 and 5.153 V requires β = 0 over a 4.6× interval, then
+β ≈ 0.12), and it costs 21.3 % on fit A.
 
-1. **lam pinned at its 0.004 bound in both fits** — the data wants more output
-   slope than the cap allows, so the plateau is now 5–7 % LOW (226/224 A vs
-   240 A measured). A bias-dependent drain element is genuinely needed — but
-   NOT kappa-as-is (pole + divider physics). Candidate: a bounded bias-
-   dependent rd (e.g. `rd·(1 + kd·Vds)` with the same `dV/dI ≤ bound`
+## Open problems
+
+1. **lam pinned at its 0.004 bound in both fits** — the data wants more
+   output slope than the cap allows, so the plateau is 5–7 % LOW (226/224 A
+   vs 240 A measured). A bias-dependent drain element is genuinely needed —
+   but NOT kappa-as-is (pole + divider physics). Candidate: a bounded
+   bias-dependent rd (e.g. `rd·(1 + kd·Vds)` with the same `dV/dI ≤ bound`
    discipline, or JFET-style depletion of rd). Not yet tried.
-2. **ksub: live in fit B (σ = 3.5) but one-point-anchored** — ksub = 0.184 V
-    implies ~420 mV/dec swing, not physical (~60–100 mV/dec); the single
-    Vgs(th) point pins the *level*, not the *slope*. Dead in fit A (the
-    Vgs=5 curve fights the anchor). cond already dropped 2.2e9 → 3.75e4 with
-    gds gone. Fix the swing from a near-threshold transfer curve if one can
-    be digitised; do NOT hard-fix ksub (pushes the anchor into vth0, corr
-    +0.99). The three-gate coupling of vk (DIBL/CLM/kink all use
-    `tanh(Vds/vk)`) is still unexamined.
-3. **vk rose 0.65 → 4.2–5.6 V** — much softer knee, consistent with the
-   "knee too sharp" complaint; σ(vk) ≈ 112–150, still barely sensed.
-4. **Vgs = 5 curve costs 21.3 % on fit A** — unreproducible by any C¹ model
-   (identical Id at Vds = 1.127 and 5.153 V requires β = 0 over a 4.6×
-   interval, then β ≈ 0.12). Fit B (5.54 %) is the fair model-quality number.
-5. **rd/rs split still unidentifiable** (rs pinned at 0 in fit A; 0.66 mΩ in
+2. **ksub one-point-anchored** — live in fit B (σ = 3.5) but ksub = 0.184 V
+   implies ~420 mV/dec swing, not physical (~60–100 mV/dec); the single
+   Vgs(th) point pins the *level*, not the *slope*. Dead in fit A (the Vgs=5
+   curve fights the anchor). Fix the swing from a digitised near-threshold
+   transfer curve; do NOT hard-fix ksub (pushes the anchor into vth0,
+   corr +0.99).
+3. **Knee shape vs datasheet Figure 3** — the figure is now on disk
+   (`data/ST8L65N044M9_Id_Vds_Vgs.png`); the visual check of fit-B knee
+   softness (vk = 5.56 V, σ ≈ 150, barely sensed) against it is still due.
+4. **theta ↔ vsat 84 % correlated** (synthetic grid) — output curves alone
+   cannot separate them; and `vthk` is barely sensed (σ ≈ 477 %, sensitivity
+   ~2000× below kp) because kk = 0.1 V saturates the kink sigmoid above
+   Vgs = 2 V. Fix from dense kink-region data or measurement.
+5. **rd/rs split unidentifiable** (rs pinned at 0 in fit A; 0.66 mΩ in
    fit B) — quote only rd+rs ≈ 30–32 mΩ.
+6. The three-gate coupling of vk (DIBL/CLM/kink all use `tanh(Vds/vk)`) is
+   unexamined.
 
-Note: the root `STATUS.md` deletion (the move of this file to
-`src/vdmos_fit/`, committed as `d399939`) lands in the same cap commit.
+## Missing (agreed architecture, not yet built)
 
-## gds leak term deleted — session 7
-
-**What.** The `+ gds·Vds` drift/substrate conductance term, the `gds` field,
-bound and free-set entry are deleted from model/params. The off state is now
-the gate-dependent softplus channel floor alone (~1e-13 A at Vgs = 0 with
-DEFAULT). `kappa` was already gone (session 5); this continues the
-"delete what the data cannot support" pass.
-
-**Why (measured, `out/nogds_probe.txt`).** On the ST8L65 data gds was a
-**one-point parameter**: 100 % of the (Vgs = Vds = 3.7 V, 250 µA) current and
-< 0.03 % of every other point. That point is the datasheet **Vgs(th) spec
-condition** — subthreshold *channel* current the softplus term already models
-with slope 1/ksub. The leak flattened the whole subthreshold transfer curve
-to a gate-independent 3.4 µA floor (slope ∞ mV/dec) and absorbed the
-threshold anchor. Reverse/HV leakage will come with the body diode / leakage
-element later, not a fitted resistor.
-
-**Probe refit (gds fixed at 0, before deletion; 4 multi-starts, one basin):**
-
-| | fit B baseline (gds free) | fit B, gds = 0 |
-|---|---|---|
-| RMSE_rel | 5.54 % | **5.54 %** (identical) |
-| off point (3.7, 3.7) | 250.0 µA via leak | **250.0 µA via channel** |
-| ksub | 0.0264, dead (σ = inf) | **0.1836, live, σ = 3.5** |
-| rank / cond | 10/10 / 2.2e9 | **9/9 / 3.75e4** |
-| plateau @19.7 V | 223.9 A (−6.8 %) | 223.9 A (unchanged) |
-
-Fit A (with the anomalous Vgs = 5 curve) loses the off point (RMSE 9.17 →
-9.97 %, ksub dead): the Vgs=5 curve's steep 5→6 V gate slope fights the
-250 µA anchor, and gds had been decoupling them. Per decision 6 fit B is the
-fair number; the honest fit-A fix is dropping the curve, not keeping the leak.
-
-**Caveat:** ksub = 0.184 V implies ~420 mV/dec swing — the single anchor
-point pins the *level*, not the *slope*. A near-threshold transfer curve
-(digitise if available) would pin the swing; do NOT hard-fix ksub to a
-physical value, that would shove the anchor into vth0 (corr +0.99).
-
-**Anchors:** DEFAULT reference numbers survive the deletion within test
-tolerances (Ron 4.271 mΩ, sat table 31.45/91.02/157.06/225.88/297.67 A,
-α = 1.078, Level-1 ratios 4.25/4.80/5.33) — the old gds = 1e-3 contributed
-≤ 0.02 A at Vds ≤ 20 V. The stall guard is unaffected (gate-degeneration
-cliff, not the leak: same set minus gds still lands in the Vds ≈ 178 V band).
-
-**Stale outputs:** none — `out/st8l65_capfit.png` and
-`out/st8l65_capfit_params.txt` were regenerated with the 9-param free set
-(session 7); they match the official table above.
-
-## on_bounds false positive fixed — session 7 (separate commit)
-
-`FitResult.on_bounds()` called a parameter "pinned" when it was within
-`rel_tol × span` of a bound. On wide boxes that is a huge absolute
-tolerance: the gds box (1e-9, 10) S gave tol 1e-2 S, so the physically
-meaningful gds = 6.8e-5 S printed as "PINNED LOWER" in the session-6 fit
-output (a false positive; the same mis-scaling survives for any wide-span
-parameter after the gds deletion).
-
-**Fix:** the pinned test is now relative to the bound's own magnitude —
-`|val − bound| ≤ rel_tol · max(|bound|, |val|, ZERO_FLOOR)` with
-`ZERO_FLOOR = 1e-5` (model units) so parameters whose bound is 0 stay
-decidable: rs = 3.8e-9 Ω is numerically at zero (flagged), rs = 0.66 mΩ is
-a real value (not flagged). True positives verified unchanged: lam = 0.004
-at its device bound still flags UPPER, rs = 0 still flags LOWER. Pinned by
-`tests/test_fit.py::test_on_bounds_not_flagged_well_inside_wide_box` /
-`test_on_bounds_flags_genuinely_pinned_parameters`.
-
+- **Body diode + HV leakage** — the biggest model hole: the package-R path
+  is Vds ≥ 0 only and reverse operation is undefined; real high-voltage
+  leakage belongs here, not in a fitted resistor.
+- **Q(V) charge model** (charge-based capacitors via symbolic differentiation)
+  and the `Tj` thermal node for Cauer-ladder co-simulation.
+- **LTspice export**: fitted parameters → `.subckt`/`.model` for A/B.
+- **CI**. (`notebooks/` is empty scaffolding.)
+- Validation target remains double-pulse Eon/Eoff within ~10 %, which static
+  fitting alone cannot deliver.

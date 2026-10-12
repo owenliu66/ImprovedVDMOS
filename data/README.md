@@ -36,8 +36,7 @@ Record the source (datasheet rev, figure number, temperature) in a sidecar
    `--weight abs` on these points.
 3. **Output curves** Id(Vds) at several Vgs → fixes vsat, lam, eta.
 4. **Off-state / subthreshold** Id(Vds) at Vgs = 0 → fixes the subthreshold
-   floor (ksub, vth0). (Used to say "fixes gds"; that leak term was deleted,
-   session 7.)
+   floor (ksub, vth0).
 5. **Kink region** (trench parts): dense Vgs spacing near the kink onset → gk, vthk, kk.
 
 Static data cannot identify capacitance or switching parameters — those come
@@ -50,16 +49,18 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
 - **Device:** ST8L65N044M9 — 650 V super-junction power MOSFET, 36–44 mΩ
   Rds(on) class.
 - **Source:** digitised from the datasheet's typical output characteristics
-  (25 °C, pulsed measurement) plus spec-table anchor points. No `.meta.txt`
-  sidecar — this entry is the provenance record. (Datasheet Figure 3, the
-  full typical output curves, was never saved to disk; ask again before
-  checking knee shape against it.)
+  (Figure 3, 25 °C, pulsed measurement) plus spec-table anchor points. No
+  `.meta.txt` sidecar — this entry is the provenance record.
+- **Figure 3 on disk:** `ST8L65N044M9_Id_Vds_Vgs.png` — the datasheet's full
+  typical output curves (Vgs = 5, 6, 7, 8, 9, 10 V; Vds 0–19 V; Id up to
+  ~240 A; print code GPDP160620251503OCH). Use it for the knee-shape check
+  of the fitted curves.
 - **Contents:** 41 points, header `index,vds,ids,vgs` (`load_csv` matches
   columns by header, so order/extras don't matter). Seven gate curves:
   Vgs = 3.7, 5, 6, 7, 8, 9, 10 V; Vds range 0–20 V.
 - **Spec anchors included:** the Vgs(th) point (Vgs = Vds = 3.7 V,
-  Id = 250 µA) — the only off-state point, anchors ksub/vth0 through the
-  subthreshold channel (the gds leak term was deleted, session 7) — and the
+  Id = 250 µA) — the only off-state point, anchoring ksub/vth0 through the
+  subthreshold channel — and the
   Rds(on) points at Vgs = 10 V (0.483 V/14 A, 1 V/29 A, 1.26 V/35 A →
   34.5–36 mΩ chord).
 - **Real-data oddity kept, not cleaned:** the Vgs = 5 curve has two points

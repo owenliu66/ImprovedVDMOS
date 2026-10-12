@@ -24,9 +24,9 @@ __all__ = [
 ]
 
 
-# Floor for the on_bounds pinned test: parameters whose bound is 0 (rd, rs)
-# are "at zero" when the value is below rel_tol * ZERO_FLOOR = 1e-8 in model
-# units; for every other bound the value's own magnitude dominates.
+# "At zero" floor for the on_bounds test (parameters whose bound is 0, like
+# rd/rs, count as pinned below rel_tol * ZERO_FLOOR); rationale in README,
+# "Fitter diagnostics".
 ZERO_FLOOR = 1e-5
 
 
@@ -46,21 +46,11 @@ class FitResult:
     def on_bounds(self, rel_tol: float = 1e-3) -> dict[str, str]:
         """Parameters that ended on a search bound, and which one.
 
-        A parameter pinned at a bound is not a physical result -- the data
-        wanted to push it further than the box allowed (or it has no
-        sensitivity there). Always check this before quoting fitted values.
-
-        The test is relative to the *bound's own magnitude* (or the value's,
-        whichever is larger), never to the width of the search box. The old
-        span-based tolerance was a false-positive machine on wide boxes:
-        the deleted gds bound (1e-9, 10) S had span 10 S, so a tol of 1e-2 S
-        called ANY gds below 0.01 S "pinned LOWER" -- including the
-        physically meaningful 6.8e-5 S (seen in the session-6 fit output).
-        Now a value is pinned only when it sits within `rel_tol` of a bound
-        measured against max(|bound|, |value|, ZERO_FLOOR). The floor keeps
-        the test meaningful for linear-space parameters whose bound is 0:
-        rs = 3.8e-9 Ohm is numerically at zero (pinned), while rs = 0.66 mOhm
-        is a real fitted value (not pinned).
+        A parameter pinned at a bound is not a physical result -- always
+        check this before quoting fitted values. The test is relative to the
+        *bound's own magnitude* (via max(|bound|, |value|, ZERO_FLOOR)),
+        never to the width of the search box; rationale in README,
+        "Fitter diagnostics".
         """
         if not self.bounds_used:
             return {}
@@ -227,24 +217,12 @@ def identifiability(
 ) -> Identifiability:
     """Diagnose which parameters the dataset can actually determine.
 
-    Built from the Jacobian at the optimum. Assumes unit-weight residuals (the
-    relative-RMSE scaling), so these are order-of-magnitude identifiability
-    numbers, not statistical confidence intervals.
-
-    A zero-sensitivity column is reported as `inf`, never as 0. That distinction
-    matters: a bare `pinv(J.T @ J)` returns *zero variance* for a column of
-    zeros, which reads as "perfectly determined" when the truth is the exact
-    opposite. For example vthk with kk = 0.1 V is fully saturated across a data
-    set whose lowest Vgs is 2 V, so the kink transition is never sampled and
-    vthk is unconstrained.
-
-    The dead test is RELATIVE to the strongest Jacobian column (1e-5 of it),
-    not an absolute threshold: a real datasheet fit has columns spanning many
-    orders of magnitude, and an absolute cutoff either misses genuinely dead
-    parameters (ST8L65 `ksub` measured 7.8e-7 of max yet was called live and
-    given a confident small sigma) or mislabels merely-weak ones. Correlations
-    and the condition number are computed over live columns only, so a dead
-    column can no longer fake a +/-1.000 pair or inflate cond.
+    Built from the Jacobian at the optimum with unit-weight residuals: these
+    are order-of-magnitude identifiability numbers, not statistical
+    confidence intervals. Zero-sensitivity columns report `inf` (never 0) and
+    are excluded from rank/cond/correlations; the dead-column test is
+    relative to the strongest Jacobian column. Rationale in README,
+    "Fitter diagnostics".
     """
     jac = result.jac
     free = tuple(free)
@@ -253,18 +231,8 @@ def identifiability(
 
     col_norm = np.linalg.norm(jac, axis=0)
     col_max = float(col_norm.max(initial=0.0))
-    # Dead-column test is RELATIVE to the strongest column. The old absolute
-    # 1e-10 * max was ~5 orders of magnitude too permissive: on the ST8L65
-    # super-junction fit ksub's column measured 7.8e-7 of max -- provably dead
-    # (pinning it at 0.007/0.02/0.04/0.06/0.09 gives identical RMSE and
-    # identical other parameters) -- yet it was classified live and reported
-    # sigma_rel = 0.038, i.e. "determined to 4 %" for a parameter carrying
-    # zero information. That is precisely the pinv-returns-zero-variance trap
-    # this function exists to avoid, and it also manufactured a spurious
-    # ksub <-> vk = +1.000 correlation and inflated cond by ~3 orders.
-    # 1e-5 sits in the empty gap between real and dead: the weakest genuinely
-    # live columns measured in this project are ~3e-4 of max (theta/gds/vthk
-    # on the synthetic grid), while dead ones land at ~1e-6.
+    # Dead test RELATIVE to the strongest column; 1e-5 sits in the empty gap
+    # between live (~3e-4 of max) and dead (~1e-6) columns. See README.
     DEAD_REL_TOL = 1e-5
     tol = max(col_max * DEAD_REL_TOL, max(col_max, 1.0) * 1e-10)
     dead = col_norm < tol
@@ -304,16 +272,12 @@ def sensitivity_report(
 ) -> dict[str, float]:
     """Mean |d ln Id / d ln p| over the dataset, evaluated before fitting.
 
-    Cheap diagnostic for deciding what to fit at all: a parameter whose current
-    value changes Id by <1e-3 relative across the whole data range cannot be
-    extracted from it. For instance vthk only matters where the data actually
-    brackets the kink onset.
-
-    Parameters sitting at their (non-negative) lower bound -- rd, rs at 0 --
-    get a one-sided probe of size `rel_step` in absolute units, and the
-    reported number is the mean *relative* Id change that the probe produces.
-    (The log-space formula d ln Id / d ln p is meaningless at p = 0, and a
-    two-sided probe would request negative resistance.)
+    Cheap diagnostic for deciding what to fit at all: a parameter whose
+    current value changes Id by <1e-3 relative across the whole data range
+    cannot be extracted from it. Parameters sitting at a zero lower bound
+    (rd, rs at 0) get a one-sided absolute probe of size `rel_step` -- the
+    log-space formula is meaningless at p = 0 and a two-sided probe would
+    request negative resistance.
     """
     base = vdmos_id(data.vds, data.vgs, params)
     scale = np.maximum(np.abs(base), 1e-12)

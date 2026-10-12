@@ -6,18 +6,13 @@ expression**, plus least-squares parameter extraction from static I-V data.
 
 ## Why
 
-> **Correction (verified against LTspice 26.0.1).** An earlier version of this
-> project claimed Level-1 VDMOS produces a negative-differential-resistance
-> region (gds ≈ −40 S) and a several-hundred-percent gds jump at the knee. That
-> was wrong, and the artifact came from a bug in this project's own reference
-> formula, which put the knee at `Vds = Vov` instead of LTspice's
-> `Vds = Vov / mtriode`. LTspice chooses that knee location *specifically* so the
-> triode slope `m·Kp·(Vov − m·Vds)` vanishes exactly where saturation begins, making
-> Level-1 **C1 continuous for any mtriode**. Pinned by
-> `tests/test_model.py::test_level1_is_c1_continuous`.
-
-The real Level-1 limitations, confirmed by `.meas` at Vgs = 5 V, Vto = 3 V, Kp = 2,
-Lambda = 0:
+> **Level-1 is C1 continuous for any mtriode.** LTspice places the
+> triode/saturation knee at `Vds = Vov / mtriode` so the triode slope
+> `m·Kp·(Vov − m·Vds)` vanishes exactly where saturation begins. (An early
+> version of this project reported a −40 S NDR dip and a gds jump at the knee;
+> that was a bug in its own reference formula, since corrected and pinned by
+> `tests/test_model.py::test_level1_is_c1_continuous`.) Verified against
+> LTspice 26.0.1 `.meas` at Vgs = 5 V, Vto = 3 V, Kp = 2, Lambda = 0:
 
 | mtriode | knee = Vov/m | Ron conductance = m·Kp·Vov | Id,sat |
 |---|---|---|---|
@@ -90,28 +85,23 @@ above): identity for Vov ≪ kcap (subthreshold and the Ron limit untouched),
 asymptote kcap for Vov ≫ kcap, and **0 ≤ dVov_eff/dVov ≤ 1 everywhere** —
 which is what keeps the package-R solver's bracket invariant dg/dId ≤ −1
 intact. `m` sets the sharpness; the measured collapse is abrupt, so
-m ≈ 10 rather than the m = 1 of a tanh. The cap is applied **before Vk**
-(variant A): with a depleted pillar the pinch-off voltage is set by the
+m ≈ 10 rather than the m = 1 of a tanh. The cap is applied **before Vk** 
+with a depleted pillar the pinch-off voltage is set by the
 depleted column, not by the surface charge. `kcap = 0` (default) is the exact
 identity, so every pre-cap anchor stays bit-identical — pinned by
 `tests/test_gate_cap.py`.
 
-*History:* the previous mechanism was `kappa`, a drain-bias-dependent series
-resistance. It is removed: `kappa` is a *voltage divider*, not a charge limit,
-and the fit made rd carry 75 % of the terminal voltage already at the ohmic
-Ron anchor (Vds = 0.483 V, Id = 14 A). The cap leaves rd a plain resistor and
-beat kappa on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and
-~1000× better conditioning.
+The previous mechanism, `kappa` (a drain-bias-dependent series resistance), was
+removed: `kappa` is a *voltage divider*, not a charge limit, and the cap beat it
+on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and ~1000× better
+conditioning.
 
 ### Off state
 
 Below threshold the softplus channel is the **only** current: Id falls
-gate-dependently with slope 1/ksub down to ~1e-13 A at Vgs = 0. The model used
-to add an ohmic `gds·Vds` drift-leakage term; it is deleted (session 7) — on
-real data it was a one-point parameter (100 % of the Vgs(th) spec point, <0.03 %
-of every other point) and a gate-independent constant floor that stole the
-threshold anchor from ksub/vth0. Real high-voltage leakage will come with the
-body diode / leakage element, not a fitted resistor.
+gate-dependently with slope 1/ksub down to ~1e-13 A at Vgs = 0. Real
+high-voltage leakage will come with the body diode / leakage element, not a
+fitted resistor.
 
 ### Package resistance (rd, rs)
 
@@ -137,6 +127,22 @@ bisection forced until progress resumes (pinned by
 rd = rs = 0 takes the explicit fast path (bit-identical to the pre-package-R
 model; pinned by `tests/test_package_r.py`). Forward polarity only (Vds ≥ 0):
 the channel-only model is singular in reverse until the body diode exists.
+
+## Project status
+
+Eight sessions, all committed to `main`. The package provides one C¹ continuous
+drain-current model (softplus subthreshold, gate-charge cap kcap/m, mobility
+degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
+package rd/rs, plus bounded least-squares extraction with identifiability
+diagnostics (dead Jacobian columns report σ = inf; `on_bounds` scales with the
+bound's magnitude, not the box width). Two mechanisms were added and then
+deleted as unsupported by the data: `kappa` (a voltage divider posing as a
+package resistance) and a `gds·Vds` leak (a one-point parameter that flattened
+the subthreshold curve) — the off state is now the gate-dependent softplus
+floor. Current fit on ST8L65N044M9: **5.54 % relative RMSE (fit B), Jacobian
+rank 9/9, cond 3.75e4**, 89 tests green. Remaining gaps: Q(V), body diode +
+HV leakage, thermal node, LTspice export — details and open problems in
+[`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
 ## Layout
 
@@ -164,7 +170,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 86 passed, 1 skipped (Tk digitizer test needs a display)
+pytest                            # 89 tests green (digitizer Tk window tests self-skip headless)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
@@ -204,6 +210,135 @@ print(res.summary())
    split leans on rs's gm-degeneration signature (individually ±15 %). Treat
    rd+rs as the measured quantity; split from geometry or 4-terminal data if
    you have it.
+
+## Implementation notes
+
+Design rationale consolidated out of the `src/vdmos_fit` code comments.
+
+### Model limits and the Level-1 A/B reference
+
+- Asymptotics of the unified expression: for `Vds ≪ Vk`,
+  `I_D → kp·Vov_eff·Vds·(1 + …)` (ohmic, m_triode = 1); for `Vds ≫ Vk`,
+  `I_D → 0.5·kp·Vov_eff²·(0.5 + θ·Vov_eff)/(1 + θ·Vov_eff)² / (1 + Vk/vsat)`.
+- `vdmos_id_level1()` implements Level-1 **as actually implemented**: knee at
+  `Vds = Vov/mtriode`, verified against LTspice 26.0.1 `.meas` (the C1 table
+  in "Why"; min Id over 0–6 V = 4.0 A for every mtriode — no negative-gds
+  region). `m_triode` sets `Ron = 1/(m·Kp·Vov)` and the knee position but
+  cannot change `Id,sat = 0.5·Kp·Vov²`.
+- Level-1's rd/rs get the same external series embedding as the improved
+  model (implicit solve, shared solver) for a fair A/B; pass `rd = rs = 0`
+  for the bare equation reference.
+
+### Trench kink: one-sided sigmoid
+
+The kink gate is `0.5·(1 + tanh((Vgs − Vthk)/kk))`, not bare `tanh()`. Tanh
+is odd, so a bare tanh injects **negative** current below the kink onset
+(about −40 mA at Vgs = 0, Vds = 1 V for the nominal parameter set) —
+non-physical and a convergence hazard in the off state. The one-sided form
+is identical to tanh once Vgs is a few kk above Vthk (tanh already saturates
+at 1.0 in float) and decays smoothly to zero below.
+
+### Gate-cap numerics
+
+- The cap is evaluated in **log space** (`logaddexp`) so `(Vov/kcap)^m`
+  cannot overflow: m ~ 10–40 is a fitted regime, not a hypothetical one.
+  Its derivative is `(1 + u^m)^(−1/m − 1)` with `u = Vov/kcap`, hence
+  0 ≤ dVov_eff/dVov ≤ 1 everywhere.
+- "Cap off" is reached by **leaving kcap out of the free set**, not by
+  driving it to the lower bound: kcap → 0⁺ means "hard cap at zero volts",
+  the opposite of off. `kcap = 0` exactly is the identity transform.
+
+### Package-R solver
+
+- Bracket: `Id ∈ [0, Vds/(rd + rs)]` — the terminal resistance is never
+  below rd + rs. `g(Id) = f(·) − Id` is strictly decreasing
+  (`dg/dId = −(rd+rs)·∂f/∂Vds − rs·∂f/∂Vgs − 1 ≤ −1`) and `f(0, ·) = 0`
+  exactly (every model term is gated by Vds or tanh(Vds/Vk)), which also
+  makes clamping the internal Vds at 0 harmless when a trial point
+  overshoots. Partial derivatives are central differences (the model is C1).
+- The solver **raises RuntimeError** on non-convergence; it never silently
+  returns an unconverged current.
+- Forward polarity only: the velocity-saturation divisor `1 + v/vsat` is
+  singular near `Vds ≈ −vsat` and the numerator is not odd, so the bracket
+  argument fails for Vds < 0. Reverse operation needs the body diode
+  (STATUS problem 7), not this solver.
+
+### Bounds and fitting-space decisions
+
+- `kp` is not the Level-1 kp: it must be re-extracted when θ/vsat are added
+  (28 → ~34.7 at DEFAULT).
+- `kcap` is excluded from `LOG_PARAMS` because 0 is a legitimate value
+  ("cap off") and cannot be logged. Its lower bound (0.05 V) is
+  deliberately well above 0 — between 0 and 0.05 V the cap is a hard clip
+  at nearly zero volts, so a free kcap must never wander there.
+- `rd`/`rs` are fitted in linear space (the physical answer can be exactly
+  zero, and datasheet package resistance never approaches 0.5 Ω on a power
+  FET). The 0.5 Ω bound is a loose *global* ceiling only; per device, cap
+  rd and rs at the datasheet Rds(on) (see `scripts/fit_st8l65.py`
+  `DEVICE_BOUNDS`).
+- `rd + rs` is always **below** the measured Rds(on) chord — the rest of
+  Rds(on) is the intrinsic channel resistance, which the model computes
+  separately; rd + rs is the lower bound on Rds(on), approached only as
+  Vgs → large. With the gate cap in place there is no bias-dependent drain
+  element left to distinguish "package" from "undepleted drift": the two
+  are exactly degenerate (correlation +1.000 when split), so they are kept
+  as one parameter.
+- `kcap`/`m` are deliberately **not** in `DEFAULT_FREE`: the cap is 0 (off)
+  for the low-VT anchor device and only needed for super-junction /
+  long-drift parts, where it must be freed explicitly (see
+  `scripts/fit_st8l65.py`). Adding them to the default set would silently
+  change every existing fit and anchor.
+- `vov_floor` is a numerical floor on Vk — keep fixed, never fitted.
+
+### Fitter diagnostics
+
+- **`on_bounds`**: a value counts as pinned only when it sits within
+  `rel_tol` of a bound measured against
+  `max(|bound|, |value|, ZERO_FLOOR)` with ZERO_FLOOR = 1e-5 (model units).
+  The old span-based tolerance was a false-positive machine on wide boxes:
+  the deleted gds bound (1e-9, 10) S had span 10 S, so any gds below 0.01 S
+  was called "pinned LOWER" — including the physically meaningful 6.8e-5 S
+  (session-6 fit output). The floor keeps the test meaningful for
+  zero-bounded linear-space parameters: rs = 3.8e-9 Ω is numerically at
+  zero (pinned), while rs = 0.66 mΩ is a real fitted value (not pinned).
+- **`identifiability`**: a zero-sensitivity column reports σ = `inf`, never
+  0 — a bare `pinv(Jᵀ J)` returns *zero variance* for a column of zeros,
+  which reads as "perfectly determined" when the truth is the exact
+  opposite (e.g. `vthk` with kk = 0.1 V is fully saturated across a dataset
+  whose lowest Vgs is 2 V, so the kink transition is never sampled and
+  vthk is unconstrained). The dead-column test is **relative** to the
+  strongest Jacobian column (1e-5 of it), not absolute: on the ST8L65
+  super-junction fit `ksub`'s column measured 7.8e-7 of max — provably dead
+  (pinning it at 0.007/0.02/0.04/0.06/0.09 gives identical RMSE and
+  identical other parameters) — yet an absolute cutoff classified it live
+  and reported a confident σ_rel = 0.038, while also manufacturing a
+  spurious ksub ↔ vk = +1.000 correlation and inflating cond by ~3 orders
+  of magnitude. 1e-5 sits in the empty gap between genuinely live columns
+  (~3e-4 of max: θ/gds/vthk on the synthetic grid) and dead ones (~1e-6).
+  Rank, cond and correlations are computed over live columns only, so a
+  dead column can no longer fake a ±1.000 pair.
+- **`sensitivity_report`** (pre-fit): parameters sitting at their
+  non-negative lower bound (rd, rs at 0) get a one-sided absolute probe of
+  size `rel_step`, and the reported number is the mean *relative* Id change
+  it produces. The log-space formula d ln Id / d ln p is meaningless at
+  p = 0, and a two-sided probe would request negative resistance.
+
+### Synthetic data
+
+`make_synthetic` noise is multiplicative (datasheet curves are read off
+log-ish axes) and applied **without clipping** the values: flooring the
+current itself distorts the subthreshold points by up to 2× and makes the
+generator worse than the fit it is supposed to validate. Near-zero currents
+are handled where they belong — in the residual denominator (`id_floor` in
+`residuals`), not in the data.
+
+### CLI
+
+`--show` and `--out/-o` are registered on every subcommand with
+`argparse.SUPPRESS` defaults so they parse before *or* after the
+subcommand. Without SUPPRESS the subparser would reset them to its own
+defaults and clobber a value already parsed before the subcommand —
+argparse fills subparser defaults into the namespace unconditionally.
 
 ## Scope / not yet implemented
 

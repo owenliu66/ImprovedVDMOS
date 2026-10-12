@@ -103,11 +103,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("-o", "--out", default="out", help="output directory (default: out/)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    # Shared flags repeated on every subcommand so they parse in either position.
-    # SUPPRESS defaults are essential: without them the subparser would reset
-    # --out/--show to their defaults and clobber a value already parsed before
-    # the subcommand (argparse fills subparser defaults into the namespace
-    # unconditionally).
+    # Shared flags repeated on every subcommand so they parse in either
+    # position; SUPPRESS defaults stop the subparser clobbering values parsed
+    # before the subcommand (see README, "CLI").
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--show", action="store_true", default=argparse.SUPPRESS,
                         help="open interactive plots")

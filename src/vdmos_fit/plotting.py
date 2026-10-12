@@ -26,12 +26,8 @@ def mtriode_shape(
     title="Level-1 mtriode is a shape knob only",
     ax=None,
 ):
-    """Level-1 Id(Vds) for several mtriode values at fixed Kp.
-
-    Reproduces the LTspice behaviour: every curve saturates at the SAME
-    Id,sat = 0.5*Kp*Vov^2 while Ron = 1/(m*Kp*Vov) and the knee at Vov/m move
-    together. You cannot set Ron, knee shape and saturation level independently,
-    which is the actual Level-1 limitation this project addresses.
+    """Level-1 Id(Vds) at several mtriode values: same Id,sat, Ron and knee
+    move together (shape knob only; see README, "Why").
     """
     ax = ax or plt.subplots(figsize=(7, 4.5))[1]
     vds = np.linspace(0.0, 6.0, 600)
@@ -57,10 +53,8 @@ def output_curves(
     title: str = "Output characteristics",
     ax=None,
 ):
-    """Family of Id(Vds) curves, with Level-1 overlaid for comparison.
-
-    Both are C1 continuous; the visible difference is the saturation exponent
-    (Level-1 is locked to the square law, the improved model is not).
+    """Family of Id(Vds) curves with Level-1 overlaid; both C1, the visible
+    difference is the saturation exponent.
     """
     vds = np.linspace(0.0, 40.0, 600) if vds is None else np.asarray(vds, float)
     ax = ax or plt.subplots(figsize=(7, 4.5))[1]
@@ -101,12 +95,8 @@ def gds_continuity(
     title: str = "Output conductance across the knee",
     ax=None,
 ):
-    """gds = dId/dVds across the knee, improved model vs Level-1.
-
-    Both models are C1 continuous -- LTspice places the Level-1 knee at
-    Vov/mtriode precisely to guarantee that. The point of this plot is that the
-    improved model's knee *shape* is a fitted degree of freedom (theta, vsat)
-    while Level-1's is locked to the square law.
+    """gds = dId/dVds across the knee, improved vs Level-1. Both C1; the
+    improved model's knee shape is a fitted degree of freedom (theta, vsat).
     """
     ax = ax or plt.subplots(figsize=(7, 4.5))[1]
     h = 1e-4

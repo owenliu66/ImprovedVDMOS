@@ -23,7 +23,7 @@ from vdmos_fit import DEFAULT, Params, fit, make_synthetic, vdmos_id
 from vdmos_fit.model import _soft_cap
 
 # Best fit on the ST8L65N044M9 datasheet data (HANDOVER section 3b):
-# cap variant A + single rd, 9 free, RMSE 6.88 %. (gds kwarg stripped in
+# Vov cap + single rd, 9 free, RMSE 6.88 %. (gds kwarg stripped in
 # session 7 when the leak term was deleted; the fitted gds was 6.8e-5 S.)
 FITTED = Params(
     kp=91.9481, vth0=4.7327, ksub=0.06, kcap=1.90909, m=9.86552,

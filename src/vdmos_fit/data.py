@@ -84,13 +84,10 @@ def make_synthetic(
 ) -> CurveSet:
     """Full grid of (Vgs, Vds) points from `truth`, with multiplicative noise.
 
-    Used to verify the fitter recovers known parameters before trusting it on
-    real datasheet data. Noise is multiplicative (datasheet curves are read off
-    log-ish axes) and is applied *without* clipping the values: flooring the
-    current itself distorts the subthreshold points by up to 2x and makes the
-    generator worse than the fit it is supposed to validate. Near-zero currents
-    are handled where they belong -- in the residual denominator (`id_floor`
-    in :func:`vdmos_fit.fit.residuals`), not in the data.
+    Noise is multiplicative and applied *without* clipping: near-zero currents
+    are handled in the residual denominator (`id_floor` in
+    :func:`vdmos_fit.fit.residuals`), not in the data -- rationale in README,
+    "Synthetic data". Used to verify the fitter recovers known parameters.
     """
     vg, vd = np.meshgrid(np.asarray(vgs_vals, float), np.asarray(vds_vals, float), indexing="ij")
     vg, vd = vg.ravel(), vd.ravel()

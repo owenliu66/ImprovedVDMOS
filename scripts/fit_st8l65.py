@@ -1,42 +1,38 @@
 """Fit the ST8L65N044M9 (650 V, 36-44 mOhm super-junction FET) static data.
 
 Gate-overdrive charge cap (kcap, m) fit -- the mechanism that replaced the
-removed `kappa` (drain-bias-dependent series resistance; see HANDOVER.md
-section 5 and the model docstring). The cap keeps rd a plain resistor and
-reproduces the bimodal gate exponent alpha (1.7 -> 0.07 across Vgs 5 -> 10).
+removed `kappa` (drain-bias-dependent series resistance; see STATUS.md and
+the model docstring). The cap keeps rd a plain resistor and reproduces the
+bimodal gate exponent alpha (1.7 -> 0.07 across Vgs 5 -> 10).
 
-Free set and per-device bounds follow HANDOVER section 4, minus the gds
-leak term (deleted session 7 -- it was a one-point parameter that absorbed
-the Vgs(th) spec point with a gate-independent floor; the softplus channel
-covers that point physically):
+Free set and per-device bounds (see the STATUS.md fit table):
   free  = kp, vth0, ksub, lam, rd, rs, vk, kcap, m
   fixed = theta = 0, vsat = 1e4 (off), eta = 0, gk = 0, vthk = 1.6,
-          kk = 0.1, vov_floor = 1e-3   (all measured dead on this data,
-          section 3e -- the cap subsumes theta/vsat, and 0-20 V data has
-          no DIBL or kink evidence)
+          kk = 0.1, vov_floor = 1e-3   (all measured dead on this data --
+          the cap subsumes theta/vsat, and 0-20 V data has no DIBL or kink
+          evidence)
   bounds: rd, rs <= 36 mOhm (datasheet Rds(on)); lam <= 0.004 1/V
           (0.038 is absurd CLM for a 650 V part; the dataset stops at
           Vds = 20 V and never enters deep saturation)
 
-Two fits are run (HANDOVER section 2, decision 5): the full 41-point set,
-and one WITHOUT the Vgs = 5 curve. That curve is physically unreproducible
-by any C1 model (Id = 3.937 A at BOTH Vds = 1.127 and 5.153 requires
-beta = 0 over a 4.6x voltage interval, then beta = 0.118; section 3f) and
-dominates the overall RMSE. The comparison shows how much of the reported
-error is that curve rather than model inadequacy.
+Two fits are run: the full 41-point set, and one WITHOUT the Vgs = 5 curve.
+That curve is physically unreproducible by any C1 model (Id = 3.937 A at
+BOTH Vds = 1.127 and 5.153 requires beta = 0 over a 4.6x voltage interval,
+then beta = 0.118; see data/README.md) and dominates the overall RMSE. The
+comparison shows how much of the reported error is that curve rather than
+model inadequacy.
 
-Watch vk: with lam capped, the output slope must come from the gds-free
-channel (lam + gds term removed), and the session-4 fit picked vk = 0.65 V
-(sigma_rel = 148, barely sensed) producing a knee narrower than the
-datasheet figure shows (section 7 item 1).
+Watch vk: with lam capped, the output slope must come from the channel lam
+term alone, and vk is barely sensed (sigma_rel ~ 110-150) -- the knee shape
+is not pinned by this data; check the fit against data/ST8L65N044M9_Id_Vds_Vgs.png
+(datasheet Figure 3).
 
     python scripts/fit_st8l65.py
 
 Dataset note: the (0 V, 650 V, 1 uA) off-state point was removed because the
-channel model has no HV leakage term (the gds workaround was deleted in
-session 7; real leakage waits for the body diode). The remaining off point
-(Vgs = Vds = 3.7 V, 250 uA) is the Vgs(th) spec condition and now anchors
-ksub/vth0 through the subthreshold channel.
+channel model has no HV leakage element (real leakage waits for the body
+diode). The remaining off point (Vgs = Vds = 3.7 V, 250 uA) is the Vgs(th)
+spec condition and anchors ksub/vth0 through the subthreshold channel.
 """
 
 from __future__ import annotations
@@ -67,7 +63,7 @@ START = Params(
     gk=0.0, vthk=1.6, kk=0.1, vk=10.0, rd=0.030, rs=0.005,
 )
 
-# HANDOVER section 4 free set minus gds (session 7). kcap/m are freed
+# 9-param free set (see the STATUS.md fit table). kcap/m are freed
 # explicitly here (they are NOT in DEFAULT_FREE: the cap is off for the
 # low-VT anchor device).
 FREE = ("kp", "vth0", "ksub", "lam", "rd", "rs", "vk", "kcap", "m")
@@ -81,7 +77,7 @@ DEVICE_BOUNDS = {
     "lam": (1e-6, 0.004),
 }
 
-# Multi-start around the session-4 basin (kp~92, kcap~1.9, m~10, vk~0.65)
+# Multi-start around the known basin (kp~92, kcap~1.9, m~10, vk~0.65)
 # plus deliberately different basins for vk/kcap/m, since vk is barely
 # sensed (sigma_rel = 148) and one bad vk/kcap start stalled at 14 % RMSE.
 MULTI_START = [
@@ -178,11 +174,11 @@ def main() -> None:
     print(f"free = {FREE}")
     print(f"device bounds overrides = {DEVICE_BOUNDS}")
 
-    print("\n--- fit A: full dataset (cap variant A, lam <= 0.004, rd/rs <= 36 mOhm) ---")
+    print("\n--- fit A: full dataset (lam <= 0.004, rd/rs <= 36 mOhm) ---")
     res_a = multi_fit(data)
     report(res_a, data, "cap A, full data")
 
-    print("\n--- fit B: WITHOUT the Vgs = 5 curve (section 3f: no C1 model fits it) ---")
+    print("\n--- fit B: WITHOUT the Vgs = 5 curve ---")
     data_b = data.subset(~np.isclose(data.vgs, 5.0))
     res_b = multi_fit(data_b)
     report(res_b, data_b, "cap A, no Vgs=5")
@@ -196,7 +192,7 @@ def main() -> None:
     print("watch vk: with lam capped the output slope must come from the channel"
           " (lam term only); a small vk"
           " with large sigma_rel means the knee shape is not pinned by this data"
-          " (HANDOVER section 7 item 1).")
+          " -- check against data/ST8L65N044M9_Id_Vds_Vgs.png (Figure 3).")
 
     OUT.mkdir(exist_ok=True)
     plot(data, {"full": res_a.params, "no_vgs5": res_b.params},
