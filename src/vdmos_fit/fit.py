@@ -11,7 +11,7 @@ from scipy.optimize import least_squares
 
 from .data import CurveSet
 from .model import vdmos_id
-from .params import DEFAULT, DEFAULT_FREE, Params, pack, unpack, vector_bounds
+from .params import BOUNDS, DEFAULT, DEFAULT_FREE, Params, pack, unpack, vector_bounds
 
 __all__ = [
     "FitResult",
@@ -34,6 +34,28 @@ class FitResult:
     success: bool
     message: str
     jac: np.ndarray | None = None
+    free: tuple[str, ...] = ()
+    bounds_used: dict[str, tuple[float, float]] | None = None
+
+    def on_bounds(self, rel_tol: float = 1e-3) -> dict[str, str]:
+        """Parameters that ended on a search bound, and which one.
+
+        A parameter pinned at a bound is not a physical result -- the data
+        wanted to push it further than the box allowed (or it has no
+        sensitivity there). Always check this before quoting fitted values.
+        """
+        if not self.bounds_used:
+            return {}
+        out: dict[str, str] = {}
+        for name in self.free:
+            lo, hi = self.bounds_used[name]
+            val = getattr(self.params, name)
+            span = hi - lo
+            if abs(val - lo) <= rel_tol * max(span, abs(lo), 1e-12):
+                out[name] = f"LOWER {lo:g}"
+            elif abs(val - hi) <= rel_tol * max(span, abs(hi), 1e-12):
+                out[name] = f"UPPER {hi:g}"
+        return out
 
     def summary(self) -> str:
         lines = [
@@ -42,8 +64,10 @@ class FitResult:
             f"cost = {self.cost:.4e}   relative RMSE = {self.rmse_rel * 100:.2f} %",
             "parameters:",
         ]
+        pinned = self.on_bounds()
         for name, val in self.params.as_dict().items():
-            lines.append(f"  {name:<10s} = {val:.6g}")
+            tag = f"   <-- pinned at {pinned[name]}" if name in pinned else ""
+            lines.append(f"  {name:<10s} = {val:.6g}{tag}")
         return "\n".join(lines)
 
 
@@ -81,16 +105,19 @@ def fit(
     weight: str = "relative",
     max_nfev: int = 4000,
     verbose: bool = False,
+    bounds_overrides: dict[str, tuple[float, float]] | None = None,
 ) -> FitResult:
     """Extract model parameters from a static I-V dataset.
 
     Positive parameters are optimised in log space with physical bounds, which
     keeps the trust-region solver from wandering through non-physical regions
-    (negative kp, zero ksub) where the model becomes singular.
+    (negative kp, zero ksub) where the model becomes singular. Pass
+    `bounds_overrides` to widen individual bounds for an exploratory fit; the
+    result records them so `FitResult.on_bounds()` can flag pinned parameters.
     """
     free = tuple(free)
     x0 = pack(start, free)
-    lo, hi = vector_bounds(free)
+    lo, hi = vector_bounds(free, bounds_overrides)
     x0 = np.clip(x0, lo + 1e-9, hi - 1e-9)
 
     sol = least_squares(
@@ -107,6 +134,7 @@ def fit(
 
     p = unpack(sol.x, free, start)
     rel = residuals(sol.x, free, data, start, weight="relative")
+    table = {**BOUNDS, **(bounds_overrides or {})}
     return FitResult(
         params=p,
         cost=float(sol.cost),
@@ -116,6 +144,8 @@ def fit(
         success=bool(sol.success),
         message=str(sol.message),
         jac=sol.jac,
+        free=free,
+        bounds_used={n: table[n] for n in free},
     )
 
 
@@ -239,15 +269,27 @@ def sensitivity_report(
     value changes Id by <1e-3 relative across the whole data range cannot be
     extracted from it. For instance vthk only matters where the data actually
     brackets the kink onset, and gds only matters in the off state.
+
+    Parameters sitting at their (non-negative) lower bound -- rd, rs at 0 --
+    get a one-sided probe of size `rel_step` in absolute units, and the
+    reported number is the mean *relative* Id change that the probe produces.
+    (The log-space formula d ln Id / d ln p is meaningless at p = 0, and a
+    two-sided probe would request negative resistance.)
     """
     base = vdmos_id(data.vds, data.vgs, params)
     scale = np.maximum(np.abs(base), 1e-12)
     out: dict[str, float] = {}
     for name in free:
         p0 = getattr(params, name)
-        step = rel_step * abs(p0) if abs(p0) > 1e-12 else rel_step
-        up = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 + step}))
-        dn = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 - step}))
-        sens = np.abs(up - dn) / (2.0 * step) / scale * abs(p0)
+        lo_b = BOUNDS.get(name, (-np.inf, np.inf))[0]
+        if abs(p0) > 1e-12 and p0 - rel_step * abs(p0) >= lo_b:
+            step = rel_step * abs(p0)
+            up = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 + step}))
+            dn = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 - step}))
+            sens = np.abs(up - dn) / (2.0 * step) / scale * abs(p0)
+        else:
+            step = rel_step
+            up = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 + step}))
+            sens = np.abs(up - base) / step / scale
         out[name] = float(np.mean(sens))
     return out

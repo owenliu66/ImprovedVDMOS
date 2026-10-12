@@ -71,6 +71,25 @@ hard corner, so it is exact in the ohmic limit and in deep saturation but up to
 ~6 % low around the knee. Quantified by
 `tests/test_model.py::test_level1_limit_agreement`.
 
+### Package resistance (rd, rs)
+
+`rd`/`rs` (bond wires, leadframe, DBC) are embedded **outside** the intrinsic
+channel, exactly as LTspice's Level-1 `Rd`/`Rs` model-card parameters do —
+`vdmos_id_level1()` takes the same kwargs for a fair A/B:
+
+```
+Vds' = Vds - (rd + rs)·Id      Vgs' = Vgs - rs·Id
+Id   = f_intrinsic(Vds', Vgs')     (implicit; solved per data point)
+```
+
+rs is not a pure series drop: it **degenerates the gate** (gm_eff = gm/(1 + rs·gm)).
+The implicit equation is solved with bracketed safeguarded Newton, never
+fixed-point iteration — in the ohmic region the fixed-point contraction factor
+is (rd+rs)·kp·Vov ≈ 1.6 for DEFAULT, which diverges. rd = rs = 0 takes the
+explicit fast path (bit-identical to the pre-package-R model; pinned by
+`tests/test_package_r.py`). Forward polarity only (Vds ≥ 0): the channel-only
+model is singular in reverse until the body diode exists.
+
 ## Layout
 
 ```
@@ -131,15 +150,22 @@ print(res.summary())
    (both flatten the knee), so their individual values are meaningless even when
    the fit is excellent. Fix one from independent data, or get them from Q(V)
    and double-pulse switching instead.
+5. `rd` and `rs` are fitted by default (datasheet Rds(on) is a 2-terminal spec
+   that already contains them). Expect **rd ↔ rs ≈ −0.999 correlated**: static
+   data pins their *sum* tightly (synthetic round trip: 0.3 % on rd+rs) but the
+   split leans on rs's gm-degeneration signature (individually ±15 %). Treat
+   rd+rs as the measured quantity; split from geometry or 4-terminal data if
+   you have it.
 
 ## Scope / not yet implemented
 
-This package is the **channel current only**. The agreed architecture keeps the
-rest of the subcircuit as-is: charge-based Q(V) capacitors (symbolic
-differentiation, guarantees charge conservation), split series R for
-channel/drift, body diode with Qrr, and the `Tj` node for Cauer-ladder
-co-simulation. Validation target remains double-pulse Eon/Eoff within ~10 %,
-which static fitting alone cannot deliver.
+This package is the **channel current plus package series resistance**. The
+agreed architecture keeps the rest of the subcircuit as-is: charge-based Q(V)
+capacitors (symbolic differentiation, guarantees charge conservation), split
+series R for channel/drift (intrinsic; the *package* rd/rs are now in the model
+itself), body diode with Qrr, and the `Tj` node for Cauer-ladder co-simulation.
+Validation target remains double-pulse Eon/Eoff within ~10 %, which static
+fitting alone cannot deliver.
 
 ## Prior art
 

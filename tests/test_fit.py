@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
@@ -78,7 +76,9 @@ def test_fixed_parameters_stay_fixed(synthetic):
 def test_uncertainty_report_shape(synthetic):
     res = fit(synthetic)
     unc = parameter_uncertainty(res)
-    assert set(unc) == set(("kp", "vth0", "theta", "vsat", "eta", "lam", "gds", "gk", "vthk"))
+    assert set(unc) == set(
+        ("kp", "vth0", "theta", "vsat", "eta", "lam", "gds", "gk", "vthk", "rd", "rs")
+    )
     assert all(v >= 0 for v in unc.values())
 
 
@@ -96,7 +96,10 @@ def test_kink_parameters_are_weakly_determined(synthetic):
     assert ident.sigma_rel["vthk"] > 1.0  # order-unity or worse
     assert ident.sigma_rel["kp"] < 1.0  # core shape params are fine
     assert ident.rank == ident.n_free  # not degenerate, just weak
-    assert ident.cond < 1e4
+    # Threshold raised 1e4 -> 1e5 (2026, package-R change): with rd/rs free and
+    # truth rd = rs = 0, the rd <-> rs columns are near-parallel (corr -0.999,
+    # only the sum is sensed), which alone pushes cond to ~1.4e4.
+    assert ident.cond < 1e5
 
 
 def test_sensitivity_report_ranks_parameters(synthetic):
@@ -117,8 +120,16 @@ def test_sensitivity_report_ranks_parameters(synthetic):
 
 def test_theta_vsat_correlation_is_reported(synthetic):
     """theta and vsat both flatten the knee; output curves alone cannot separate
-    them, so the report must surface the pairing."""
-    ident = identifiability(fit(synthetic))
+    them, so the report must surface the pairing.
+
+    Evaluated with the classic 9-parameter free set: once rd/rs join the fit,
+    the knee-flattening trade-off redistributes across more parameters and the
+    single theta<->vsat pair drops below the 0.8 reporting threshold (their
+    individual sigmas stay order-unity or worse -- see
+    tests/test_package_r.py::test_fit_recovers_package_resistance).
+    """
+    legacy_free = ("kp", "vth0", "theta", "vsat", "eta", "lam", "gds", "gk", "vthk")
+    ident = identifiability(fit(synthetic, free=legacy_free), legacy_free)
     pairs = {(a, b) for a, b, _ in ident.worst_pairs}
     assert ("theta", "vsat") in pairs
     # and both carry large individual error bars as a consequence

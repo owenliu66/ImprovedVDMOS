@@ -41,6 +41,39 @@ class Params:
     kk : float     Kink gate transition softness [V].
     vk : float     Drain-bias softness [V] for the tanh() gates.
     vov_floor : float  Numerical floor on Vk [V]; keep fixed, not fitted.
+    rd : float     Package drain resistance [Ohm] (bond wires, leadframe, pins).
+                   Embedded outside the intrinsic channel: the internal drain
+                   sees Vds - (rd+rs)*Id. Fitted by default because datasheet
+                   Rds(on) is a 2-terminal spec that already contains rd+rs.
+                   NOTE: rd + rs is always BELOW the measured Rds(on) chord --
+                   the rest of Rds(on) is the intrinsic channel resistance,
+                   which the model computes separately. rd+rs is the *lower*
+                   bound on Rds(on), approached only as Vgs -> large.
+    rs : float     Package source resistance [Ohm]. Also *degenerates* the
+                   gate drive: the internal gate-source voltage is
+                   Vgs - rs*Id, so gm_eff = gm/(1 + rs*gm).
+    kappa : float  Drain-bias coefficient of the drain-side series resistance
+                   [1/V], 0 by default (plain rd/rs embedding).
+
+                   With kappa > 0 the drain-side resistance grows with the
+                   voltage it supports: R_d(u) = rd*(1 + kappa*u), so the
+                   channel sees Vds - u - rs*Id with u = Id*rd/(1 - Id*rd*kappa).
+                   Physically this is super-junction JFET/RESURF depletion: the
+                   charge-balanced columns deplete as drain bias rises, so the
+                   drift specific on-resistance climbs with Vds. With the
+                   channel strongly enhanced the terminal characteristic becomes
+                   Id -> Vds/(rd*(1 + kappa*Vds)), flattening toward the finite
+                   drift-limited plateau Id_max = 1/(rd*kappa). That is the only
+                   mechanism in this model that can produce the gate exponent
+                   alpha << 1 (measured ~0.1 at Vgs 8-10 V, Vds ~ 19 V on the
+                   650 V SJ part) that theta/vsat/lam cannot reach.
+
+                   KNOWN MODELING TENSION: kappa multiplies `rd`, which is
+                   defined as *package* resistance (wirebonds, pins) and should
+                   not vary with drain bias. The drain-region resistance that
+                   actually depletes is a separate physical element. A cleaner
+                   form adds an explicit drift resistance (e.g. rdrift with its
+                   own kappa) and keeps rd/rs purely parasitic -- see STATUS.
     """
 
     kp: float = 34.7
@@ -56,6 +89,9 @@ class Params:
     kk: float = 0.1
     vk: float = 10.0
     vov_floor: float = 1e-3
+    rd: float = 0.0
+    rs: float = 0.0
+    kappa: float = 0.0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -88,9 +124,21 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "kk": (1e-3, 5.0),
     "vk": (0.1, 200.0),
     "vov_floor": (1e-6, 1e-1),
+    # Linear space, not log: the physical answer can be exactly zero, and
+    # datasheet package resistance never approaches 0.5 Ohm on a power FET.
+    "rd": (0.0, 0.5),
+    "rs": (0.0, 0.5),
+    # Linear space: kappa = 0 means "no drain-bias effect" and is a legitimate
+    # answer (plain package resistance). Upper bound keeps rd*kappa*Vds within
+    # a sane range over the fitted window.
+    "kappa": (0.0, 2.0),
 }
 
 # Sensible starting free set: everything that shapes the static I-V curves.
+# `kappa` is deliberately NOT here: it is 0 for the low-VT anchor device and
+# only needed for super-junction / long-drift parts, where it must be freed
+# explicitly (see scripts/fit_st8l65.py). Adding it to the default set would
+# silently change every existing fit and anchor.
 DEFAULT_FREE: tuple[str, ...] = (
     "kp",
     "vth0",
@@ -101,6 +149,8 @@ DEFAULT_FREE: tuple[str, ...] = (
     "gds",
     "gk",
     "vthk",
+    "rd",
+    "rs",
 )
 
 
@@ -123,11 +173,20 @@ def unpack(x: np.ndarray, free: Sequence[str], base: Params = DEFAULT) -> Params
     return Params(**values)
 
 
-def vector_bounds(free: Sequence[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Bounds for the flat vector, mapped through the log transform."""
+def vector_bounds(
+    free: Sequence[str],
+    overrides: dict[str, tuple[float, float]] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bounds for the flat vector, mapped through the log transform.
+
+    `overrides` replaces individual entries of :data:`BOUNDS` for one call
+    without mutating the module-level table (useful for exploratory fits that
+    need a wider search box than the physical defaults).
+    """
+    table = {**BOUNDS, **(overrides or {})}
     lo, hi = [], []
     for name in free:
-        a, b = BOUNDS[name]
+        a, b = table[name]
         if name in LOG_PARAMS:
             lo.append(np.log(a))
             hi.append(np.log(b))

@@ -20,9 +20,11 @@ Projects/ImprovedVDMOS/
 
 - **Model** — `vdmos_id()` evaluates the unified continuous drain current
   (softplus subthreshold, mobility degradation via Vk, velocity saturation,
-  DIBL, gated CLM, drift conductance, one-sided kink sigmoid).
-  `vdmos_id_level1()` is now the **correct** LTspice reference with knee at
-  `Vov/mtriode`.
+  DIBL, gated CLM, drift conductance, one-sided kink sigmoid), embedded with
+  package series resistance rd/rs (implicit external-node solve, LTspice
+  Rd/Rs semantics; Vds ≥ 0 only). `vdmos_id_level1()` is now the **correct**
+  LTspice reference with knee at `Vov/mtriode` and takes the same rd/rs
+  embedding for fair A/B.
 - **Extraction** — `fit()` runs bounded `least_squares` with positive
   parameters in log space; two-stage relative→ampere weighting is wired into
   `scripts/fit_datasheet.py`.
@@ -41,11 +43,12 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **39 tests passed** (verified 2026-10-11 run, including the new
-  `test_matched_ron_square_law_overprediction` regression, the tightened alpha
-  pin, and 8 CLI parser tests).
-- **`ruff check` still reports 1 error**: unused `import math` in
-  `tests/test_fit.py:5`. The `E501` and `E731` issues are resolved.
+- **78 tests passed** (verified run after the package-R change: previous 39 +
+  12 new `test_package_r.py` + digitizer suite). `ruff check` clean (the last
+  outstanding error, unused `import math` in `tests/test_fit.py`, fixed).
+- All pre-package-R anchors unchanged (rd = rs = 0 fast path is bit-identical):
+  Ron 4.27 mΩ, saturation table 31.5/91.0/157.1/225.9/297.7 A, α = 1.08,
+  Level-1 reference 960.4 A at Vgs = 10/Vds = 20.
 - Round-trip fit recovers kp/vth0/vsat/eta/lam/gk within ~1 %, relative RMSE
   0.86 %.
 - Corrected Level-1 matches LTspice 26.0.1 `.meas` exactly: Id = 4.000000 A
@@ -108,3 +111,35 @@ Projects/ImprovedVDMOS/
 | Kink gate | bare `tanh((Vgs−Vthk)/kk)` (odd → negative off-state current) | one-sided `0.5·(1+tanh(…))` |
 | Level-1 limit of improved model | "strict superset, exact" | smooth approximation: exact in ohmic + deep saturation, ~6 % low at the knee |
 | `parameter_uncertainty` | zero Jacobian column → σ = 0 ("perfectly determined") | `identifiability()` → σ = `inf` ("NOT SENSED"), rank/cond/correlations |
+
+## Package resistance added (rd, rs) — 2026 session 2
+
+- **Embedding:** `Vds' = Vds − (rd+rs)·Id`, `Vgs' = Vgs − rs·Id`, implicit per
+  point; shared bracketed safeguarded-Newton solver in `model.py`
+  (`_solve_package_r`), used by both `vdmos_id` and `vdmos_id_level1`.
+  Fixed-point iteration deliberately avoided: contraction factor
+  (rd+rs)·kp·Vov ≈ 1.6 > 1 in the ohmic region for DEFAULT.
+- **Fitted by default** (`DEFAULT_FREE` + 2), linear space, bounds [0, 0.5] Ω —
+  datasheet Rds(on) is 2-terminal and already contains rd+rs.
+- **Measured properties (pinned by `tests/test_package_r.py`):**
+  - Solver matches independent `brentq` roots to 3e-16 relative; grid
+    self-consistency residual < 1e-8.
+  - Synthetic round trip (truth rd = 2 mΩ, rs = 1 mΩ): rd+rs recovered to
+    0.3 %, individually −6.5 % / +14 %; identifiability reports
+    **rd ↔ rs = −0.999** — only the sum is strongly pinned by static data.
+  - Off state: Id = gds·Vds/(1 + gds·(rd+rs)) exactly.
+  - Terminal Ron = intrinsic + rd + rs to within ~70 µΩ (chord-resistance
+    curvature at the shifted internal Vds accounts for the residual).
+  - When truth rd = rs = 0, the free rd/rs columns are near-parallel →
+    identifiability cond rises 1e4 → 1.4e4 (test threshold raised to 1e5);
+    the theta↔vsat > 0.8 pair drops out of `worst_pairs` with 11 free params
+    (test now evaluates it on the legacy 9-param set).
+- **Scope guard:** package-R path raises `ValueError` for Vds < 0. Discovered
+  while testing: the *intrinsic* channel model is itself undefined in reverse
+  (velocity-saturation divisor 1 + v/vsat singular near Vds ≈ −vsat; e.g.
+  f(−20, 10) = +1038 A garbage). Body diode (problem 7) must define reverse
+  operation; the fast path's finiteness sweep (`test_no_nan_or_inf_anywhere`)
+  does not imply a valid reverse characteristic.
+- `sensitivity_report` now probes bound-anchored parameters (rd/rs at 0)
+  one-sided; the log-space formula is meaningless at p = 0 and a two-sided
+  probe would request negative resistance.
