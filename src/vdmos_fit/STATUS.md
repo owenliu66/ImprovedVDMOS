@@ -197,33 +197,32 @@ test called it live, reported a confident small σ, and manufactured the
 ksub↔vk = +1.000 pair plus ~3 decades of cond inflation. Pinned by
 `test_dead_parameter_reports_inf_not_a_small_sigma`.
 
-**Fits (`scripts/fit_st8l65.py`, rewritten; outputs `out/st8l65_capfit.png`,
-`out/st8l65_capfit_params.txt`).** Free = kp, vth0, ksub, lam, gds, rd, rs,
-vk, kcap, m; fixed θ = 0, vsat = 1e4, η = 0, gk = 0, vthk = 1.6, kk = 0.1
-(measured dead on this data); device bounds rd, rs ≤ 36 mΩ (datasheet
-Rds(on)) and lam ≤ 0.004 1/V. Four multi-starts, all converge to the same
-basin (the cap + capped lam made the landscape tame).
+**Fits (`scripts/fit_st8l65.py`; outputs `out/st8l65_capfit.png`,
+`out/st8l65_capfit_params.txt`).** Official table = the session-7 9-param
+run (gds deleted). Free = kp, vth0, ksub, lam, rd, rs, vk, kcap, m; fixed
+θ = 0, vsat = 1e4, η = 0, gk = 0, vthk = 1.6, kk = 0.1 (measured dead on
+this data); device bounds rd, rs ≤ 36 mΩ (datasheet Rds(on)) and
+lam ≤ 0.004 1/V. Four multi-starts, all converge to the same basin in BOTH
+fits (the cap + capped lam made the landscape tame). The session-4/5
+10-param (with-gds) table is superseded and lives in git history.
 
 | | fit A (full, 41 pts) | fit B (no Vgs=5, 36 pts) |
 |---|---|---|
-| RMSE_rel | **9.17 %** | **5.54 %** |
-| kp | 63.59 | 50.60 |
-| vth0 | 4.6656 | 4.4460 |
-| ksub | 0.02336 | 0.02645 |
+| RMSE_rel | **9.97 %** | **5.54 %** |
+| kp | 63.59 | 50.58 |
+| vth0 | 4.6656 | 4.4459 |
+| ksub | 0.0234 — dead (σ = inf) | **0.1836 — live, σ = 3.5** |
 | lam | **0.004 PINNED UPPER** | **0.004 PINNED UPPER** |
-| gds | 6.766e-5 S | 6.757e-5 S |
 | rd | 31.92 mΩ | 29.85 mΩ |
-| rs | 3.8e-9 **PINNED LOWER** | 0.66 mΩ |
-| vk | **4.245** | **5.562** |
+| rs | 3.6e-9 **PINNED LOWER** | 0.66 mΩ |
+| vk | **4.244** | **5.562** |
 | kcap | 2.610 V | 2.904 V |
 | m | 6.203 | 10.241 |
-| rd+rs | 31.92 mΩ | 30.51 mΩ (chord 34.5 mΩ) |
+| rd+rs | 31.92 mΩ | 30.50 mΩ (chord 34.5 mΩ) |
 | plateau Vgs=10 @19.7 V | **226.4 A** (meas 240.2, −5.7 %) | **223.9 A** (−6.8 %) |
-| rank / cond | 10/10 / 3.1e9 | 10/10 / 2.2e9 |
+| Vgs(th) point (3.7, 3.7) | 0 µA — abandoned | **250.0 µA — exact, via channel** |
+| rank / cond | **8/9** / 2.9e4 | **9/9** / 3.75e4 |
 | Vgs≥6 only | 5.83 % | 5.62 % |
-
-(rank/cond measured with the OLD identifiability tolerance; see the fix
-above — re-measure after the next fit run.)
 
 **Open problems from these fits (replace the session-4 list):**
 
@@ -233,11 +232,14 @@ above — re-measure after the next fit run.)
    NOT kappa-as-is (pole + divider physics). Candidate: a bounded bias-
    dependent rd (e.g. `rd·(1 + kd·Vds)` with the same `dV/dI ≤ bound`
    discipline, or JFET-style depletion of rd). Not yet tried.
-2. **ksub is dead on this dataset** (one off-state point only; see the
-   identifiability fix above). Fix ksub from a subthreshold spec or tie
-   vk↔Vk; re-run; cond should drop from ~2e9 back to ~1e4–1e5. The
-   three-gate coupling of vk (DIBL/CLM/kink all use `tanh(Vds/vk)`) is still
-   unexamined.
+2. **ksub: live in fit B (σ = 3.5) but one-point-anchored** — ksub = 0.184 V
+    implies ~420 mV/dec swing, not physical (~60–100 mV/dec); the single
+    Vgs(th) point pins the *level*, not the *slope*. Dead in fit A (the
+    Vgs=5 curve fights the anchor). cond already dropped 2.2e9 → 3.75e4 with
+    gds gone. Fix the swing from a near-threshold transfer curve if one can
+    be digitised; do NOT hard-fix ksub (pushes the anchor into vth0, corr
+    +0.99). The three-gate coupling of vk (DIBL/CLM/kink all use
+    `tanh(Vds/vk)`) is still unexamined.
 3. **vk rose 0.65 → 4.2–5.6 V** — much softer knee, consistent with the
    "knee too sharp" complaint; σ(vk) ≈ 112–150, still barely sensed.
 4. **Vgs = 5 curve costs 21.3 % on fit A** — unreproducible by any C¹ model
@@ -292,8 +294,9 @@ tolerances (Ron 4.271 mΩ, sat table 31.45/91.02/157.06/225.88/297.67 A,
 ≤ 0.02 A at Vds ≤ 20 V. The stall guard is unaffected (gate-degeneration
 cliff, not the leak: same set minus gds still lands in the Vds ≈ 178 V band).
 
-**Stale outputs:** `out/st8l65_capfit_params.txt` still lists gds — the
-official fits must be re-run with the 9-param free set (next session).
+**Stale outputs:** none — `out/st8l65_capfit.png` and
+`out/st8l65_capfit_params.txt` were regenerated with the 9-param free set
+(session 7); they match the official table above.
 
 ## on_bounds false positive fixed — session 7 (separate commit)
 

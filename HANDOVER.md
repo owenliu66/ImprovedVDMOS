@@ -1,6 +1,35 @@
-# Handover — ImprovedVDMOS: gds leak term DELETED (session 7). Code edits DONE, docs + pytest/ruff + commit PENDING.
+# Handover — ImprovedVDMOS: gds leak term DELETED (session 7). ALL FOLLOW-UPS DONE (session 8).
 
-## 0. READ THIS FIRST — where session 7 stopped
+## 0. STATUS — everything from this handover is now committed
+
+Session 8 finished the pending queue:
+- **§2 docs + pytest/ruff + commit 1: DONE.** README/STATUS/data-README gds
+  edits applied (README + STATUS were already done when session 8 started;
+  data/README.md + the STATUS verified-state/off-state bullets were not).
+  One new failure surfaced and was fixed: `test_solver_self_consistency_on_grid`
+  demanded 1e-8 *relative* residual at the ~1e-14 A softplus floor (below the
+  solver's atol=1e-12 A); now asserts the solver contract
+  `resid <= 1e-12 + 1e-8*|Id|`. Suite: **87 tests green** (digitizer Tk window
+  tests self-skip 0–2 per headless run — the "N passed, M skipped" total is
+  flaky, don't pin it). Commit **f9e6173**.
+- **§4 on_bounds fix + tests + commit 2: DONE.** Pinned test now relative to
+  bound magnitude (`|val-bound| <= rel_tol*max(|bound|,|val|,ZERO_FLOOR=1e-5)`),
+  not span. gk=6.8e-5 in (1e-12,100) no longer false-flags; rs=3.8e-9 and
+  lam=0.004 still flag. Two new tests in test_fit.py → suite now 89. Commit
+  **f1868cc**.
+- **§5.1 re-run fit_st8l65.py + regenerate out/ + STATUS table: DONE.**
+  Results match out/nogds_probe.txt exactly: fit B 5.54 %, ksub live σ=3.5,
+  rank 9/9, cond 3.75e4, off point 250.0 µA exact; fit A 9.97 %, ksub dead,
+  rank 8/9, off point abandoned. STATUS fit table updated to the official
+  9-param numbers; stale-output note removed. Commit 3 (docs).
+
+**Remaining queue = §5 items 2–6 only** (ksub swing data, bias-dependent drain
+element for lam/plateau, α/β ladder check, datasheet Fig 3 ask, body diode).
+`.vscode/` still untracked (user's call).
+
+---
+
+## 0b. Original session-7 handover text (kept for reference)
 
 Task: "delete everything that doesn't make physical sense", starting with the
 `gds·Vds` drift-leakage term (reverse leakage will be a body-diode/leakage
