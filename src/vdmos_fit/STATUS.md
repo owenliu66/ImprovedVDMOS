@@ -295,3 +295,21 @@ cliff, not the leak: same set minus gds still lands in the Vds ≈ 178 V band).
 **Stale outputs:** `out/st8l65_capfit_params.txt` still lists gds — the
 official fits must be re-run with the 9-param free set (next session).
 
+## on_bounds false positive fixed — session 7 (separate commit)
+
+`FitResult.on_bounds()` called a parameter "pinned" when it was within
+`rel_tol × span` of a bound. On wide boxes that is a huge absolute
+tolerance: the gds box (1e-9, 10) S gave tol 1e-2 S, so the physically
+meaningful gds = 6.8e-5 S printed as "PINNED LOWER" in the session-6 fit
+output (a false positive; the same mis-scaling survives for any wide-span
+parameter after the gds deletion).
+
+**Fix:** the pinned test is now relative to the bound's own magnitude —
+`|val − bound| ≤ rel_tol · max(|bound|, |val|, ZERO_FLOOR)` with
+`ZERO_FLOOR = 1e-5` (model units) so parameters whose bound is 0 stay
+decidable: rs = 3.8e-9 Ω is numerically at zero (flagged), rs = 0.66 mΩ is
+a real value (not flagged). True positives verified unchanged: lam = 0.004
+at its device bound still flags UPPER, rs = 0 still flags LOWER. Pinned by
+`tests/test_fit.py::test_on_bounds_not_flagged_well_inside_wide_box` /
+`test_on_bounds_flags_genuinely_pinned_parameters`.
+

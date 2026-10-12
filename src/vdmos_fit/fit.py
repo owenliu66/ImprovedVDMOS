@@ -24,6 +24,12 @@ __all__ = [
 ]
 
 
+# Floor for the on_bounds pinned test: parameters whose bound is 0 (rd, rs)
+# are "at zero" when the value is below rel_tol * ZERO_FLOOR = 1e-8 in model
+# units; for every other bound the value's own magnitude dominates.
+ZERO_FLOOR = 1e-5
+
+
 @dataclass(frozen=True)
 class FitResult:
     params: Params
@@ -43,6 +49,18 @@ class FitResult:
         A parameter pinned at a bound is not a physical result -- the data
         wanted to push it further than the box allowed (or it has no
         sensitivity there). Always check this before quoting fitted values.
+
+        The test is relative to the *bound's own magnitude* (or the value's,
+        whichever is larger), never to the width of the search box. The old
+        span-based tolerance was a false-positive machine on wide boxes:
+        the deleted gds bound (1e-9, 10) S had span 10 S, so a tol of 1e-2 S
+        called ANY gds below 0.01 S "pinned LOWER" -- including the
+        physically meaningful 6.8e-5 S (seen in the session-6 fit output).
+        Now a value is pinned only when it sits within `rel_tol` of a bound
+        measured against max(|bound|, |value|, ZERO_FLOOR). The floor keeps
+        the test meaningful for linear-space parameters whose bound is 0:
+        rs = 3.8e-9 Ohm is numerically at zero (pinned), while rs = 0.66 mOhm
+        is a real fitted value (not pinned).
         """
         if not self.bounds_used:
             return {}
@@ -50,10 +68,9 @@ class FitResult:
         for name in self.free:
             lo, hi = self.bounds_used[name]
             val = getattr(self.params, name)
-            span = hi - lo
-            if abs(val - lo) <= rel_tol * max(span, abs(lo), 1e-12):
+            if abs(val - lo) <= rel_tol * max(abs(lo), abs(val), ZERO_FLOOR):
                 out[name] = f"LOWER {lo:g}"
-            elif abs(val - hi) <= rel_tol * max(span, abs(hi), 1e-12):
+            elif abs(val - hi) <= rel_tol * max(abs(hi), abs(val), ZERO_FLOOR):
                 out[name] = f"UPPER {hi:g}"
         return out
 

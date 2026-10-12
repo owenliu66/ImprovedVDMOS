@@ -10,6 +10,7 @@ import pytest
 from vdmos_fit import (
     DEFAULT,
     CurveSet,
+    FitResult,
     Params,
     example_dataset,
     fit,
@@ -175,6 +176,56 @@ def test_dead_parameter_reports_inf_not_a_small_sigma():
     pinned = fit(data, start=truth.replace(ksub=0.30),
                  free=tuple(n for n in free if n != "ksub"))
     assert pinned.params.kp == pytest.approx(30.0, rel=1e-3)
+
+
+# ---------------------------------------------------- on_bounds pinned test
+def _fake_fit(p: Params, free: tuple[str, ...], bounds: dict) -> FitResult:
+    """FitResult without running a fit -- on_bounds only reads these fields."""
+    return FitResult(
+        params=p, cost=0.0, rmse_rel=0.0, n_points=1, n_free=len(free),
+        success=True, message="", free=free, bounds_used=bounds,
+    )
+
+
+def test_on_bounds_not_flagged_well_inside_wide_box():
+    """Regression (session 6 false positive): the pinned test must scale with
+    the parameter's own magnitude, NOT with the width of the search box.
+
+    The deleted gds bound (1e-9, 10) S had span 10 S, so the old tolerance
+    rel_tol*span = 1e-2 S called any gds below 0.01 S "pinned LOWER" -- even
+    the physically meaningful 6.8e-5 S. gk inherited the same wide box (its
+    bound spans 14 decades), so it reproduces the bug exactly: 6.8e-5 S must
+    read as an interior value.
+    """
+    p = DEFAULT.replace(gk=6.8e-5)
+    res = _fake_fit(p, ("gk",), {"gk": (1e-12, 100.0)})
+    assert res.on_bounds() == {}
+
+
+def test_on_bounds_flags_genuinely_pinned_parameters():
+    """The magnitude fix must not lose true positives.
+
+    - rs = 0 and rs = 3.8e-9 Ohm (session-6 fit A value) are numerically at
+      the zero lower bound -> pinned (ZERO_FLOOR makes 'at zero' decidable
+      when the bound itself has no magnitude).
+    - rs = 0.66 mOhm (session-7 fit B value) is a real resistance -> free.
+    - lam = 0.004 at its device bound 0.004 1/V -> pinned UPPER (the real
+      open problem from the ST8L65 fits).
+    """
+    dev = (0.0, 0.036)
+    p0 = DEFAULT.replace(rs=0.0)
+    assert _fake_fit(p0, ("rs",), {"rs": dev}).on_bounds() == {"rs": "LOWER 0"}
+    p1 = DEFAULT.replace(rs=3.8e-9)
+    assert _fake_fit(p1, ("rs",), {"rs": dev}).on_bounds() == {"rs": "LOWER 0"}
+    p2 = DEFAULT.replace(rs=0.66e-3)
+    assert _fake_fit(p2, ("rs",), {"rs": dev}).on_bounds() == {}
+    p3 = DEFAULT.replace(lam=0.004)
+    assert _fake_fit(p3, ("lam",), {"lam": (1e-6, 0.004)}).on_bounds() == {
+        "lam": "UPPER 0.004"
+    }
+    # just below the bound is NOT pinned: 0.0039 is an interior optimum
+    p4 = DEFAULT.replace(lam=0.0039)
+    assert _fake_fit(p4, ("lam",), {"lam": (1e-6, 0.004)}).on_bounds() == {}
 
 
 def test_curveset_validation():
