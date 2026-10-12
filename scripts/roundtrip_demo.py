@@ -25,7 +25,7 @@ from vdmos_fit import (  # noqa: E402
 from vdmos_fit.plotting import overlay_data  # noqa: E402
 
 TRUTH = Params(
-    kp=30.0, vth0=3.1, theta=0.02, vsat=1.2, eta=0.03, lam=0.015, gds=2e-3, gk=0.3, vthk=1.5
+    kp=30.0, vth0=3.1, theta=0.02, vsat=1.2, eta=0.03, lam=0.015, gk=0.3, vthk=1.5
 )
 
 
@@ -44,7 +44,7 @@ def main() -> int:
 
     print("\nrecovered vs truth:")
     print(f"{'param':<10s} {'truth':>12s} {'fitted':>12s} {'error %':>10s}")
-    for name in ("kp", "vth0", "theta", "vsat", "eta", "lam", "gds", "gk", "vthk"):
+    for name in ("kp", "vth0", "theta", "vsat", "eta", "lam", "gk", "vthk"):
         want, got = getattr(TRUTH, name), getattr(res.params, name)
         err = 100.0 * (got - want) / want
         print(f"{name:<10s} {want:12.4g} {got:12.4g} {err:10.2f}")

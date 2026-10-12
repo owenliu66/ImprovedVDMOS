@@ -5,8 +5,11 @@ removed `kappa` (drain-bias-dependent series resistance; see HANDOVER.md
 section 5 and the model docstring). The cap keeps rd a plain resistor and
 reproduces the bimodal gate exponent alpha (1.7 -> 0.07 across Vgs 5 -> 10).
 
-Free set and per-device bounds follow HANDOVER section 4:
-  free  = kp, vth0, ksub, lam, gds, rd, rs, vk, kcap, m
+Free set and per-device bounds follow HANDOVER section 4, minus the gds
+leak term (deleted session 7 -- it was a one-point parameter that absorbed
+the Vgs(th) spec point with a gate-independent floor; the softplus channel
+covers that point physically):
+  free  = kp, vth0, ksub, lam, rd, rs, vk, kcap, m
   fixed = theta = 0, vsat = 1e4 (off), eta = 0, gk = 0, vthk = 1.6,
           kk = 0.1, vov_floor = 1e-3   (all measured dead on this data,
           section 3e -- the cap subsumes theta/vsat, and 0-20 V data has
@@ -22,16 +25,18 @@ beta = 0 over a 4.6x voltage interval, then beta = 0.118; section 3f) and
 dominates the overall RMSE. The comparison shows how much of the reported
 error is that curve rather than model inadequacy.
 
-Watch vk: with lam capped, the output slope must come from gds/vk, and the
-session-4 fit picked vk = 0.65 V (sigma_rel = 148, barely sensed) producing
-a knee narrower than the datasheet figure shows (section 7 item 1).
+Watch vk: with lam capped, the output slope must come from the gds-free
+channel (lam + gds term removed), and the session-4 fit picked vk = 0.65 V
+(sigma_rel = 148, barely sensed) producing a knee narrower than the
+datasheet figure shows (section 7 item 1).
 
     python scripts/fit_st8l65.py
 
 Dataset note: the (0 V, 650 V, 1 uA) off-state point was removed because the
-channel model has no HV leakage term -- one gds cannot give both 1 uA at 650 V
-and 250 uA at 3.7 V (1.5 nS vs 68 uS). The remaining off point (Vgs = Vds =
-3.7 V, 250 uA) anchors gds directly.
+channel model has no HV leakage term (the gds workaround was deleted in
+session 7; real leakage waits for the body diode). The remaining off point
+(Vgs = Vds = 3.7 V, 250 uA) is the Vgs(th) spec condition and now anchors
+ksub/vth0 through the subthreshold channel.
 """
 
 from __future__ import annotations
@@ -56,16 +61,16 @@ OUT = ROOT / "out"
 
 # Re-anchored start for a ~36 mOhm, Vth ~ 4.7 V part. DEFAULT is a 4 mOhm
 # low-VT device and must never be used as a start for a different one.
-GDS_OFF = 250e-6 / 3.7  # from the single remaining off-state point
 START = Params(
     kp=40.0, vth0=4.7, ksub=0.06, kcap=2.0, m=10.0,
-    theta=0.0, vsat=1e4, eta=0.0, lam=1e-3, gds=GDS_OFF,
+    theta=0.0, vsat=1e4, eta=0.0, lam=1e-3,
     gk=0.0, vthk=1.6, kk=0.1, vk=10.0, rd=0.030, rs=0.005,
 )
 
-# HANDOVER section 4 free set. kcap/m are freed explicitly here (they are NOT
-# in DEFAULT_FREE: the cap is off for the low-VT anchor device).
-FREE = ("kp", "vth0", "ksub", "lam", "gds", "rd", "rs", "vk", "kcap", "m")
+# HANDOVER section 4 free set minus gds (session 7). kcap/m are freed
+# explicitly here (they are NOT in DEFAULT_FREE: the cap is off for the
+# low-VT anchor device).
+FREE = ("kp", "vth0", "ksub", "lam", "rd", "rs", "vk", "kcap", "m")
 
 # Per-device bounds: rd/rs each capped at the datasheet Rds(on) = 36 mOhm
 # (global BOUNDS stay at 0.5 Ohm), lam capped at 0.004 1/V -- the
@@ -118,6 +123,9 @@ def report(res: FitResult, data, label: str) -> None:
           f"   (measured Ron chord at Vgs=10: 34.5 mOhm)")
     plateau = float(vdmos_id(19.7, 10.0, p))
     print(f"   plateau Vgs=10 @ 19.7 V: {plateau:.1f} A   (measured 240.2 A)")
+    off = float(vdmos_id(3.7, 3.7, p))
+    print(f"   Vgs(th) point (3.7, 3.7): {off * 1e6:.1f} uA   (measured 250 uA)"
+          "   <- anchors ksub/vth0 via the subthreshold channel")
     pinned = res.on_bounds()
     if pinned:
         print("   PINNED AT BOUND (not a physical result):")
@@ -167,7 +175,6 @@ def plot(data, fits: dict[str, Params], path: Path) -> None:
 def main() -> None:
     data = load_csv(CSV)
     print(f"{data.label}: {len(data)} points, Vgs grid {data.vgs_grid()}")
-    print(f"gds anchored from off point (3.7 V, 250 uA) = {GDS_OFF * 1e6:.2f} uS")
     print(f"free = {FREE}")
     print(f"device bounds overrides = {DEVICE_BOUNDS}")
 
@@ -186,7 +193,8 @@ def main() -> None:
 
     print(f"\nVgs>=6 only: full-data fit {group_rmse(res_a.params, data, data.vgs >= 6):.2f} %"
           f" | no-Vgs5 fit {group_rmse(res_b.params, data, data.vgs >= 6):.2f} %")
-    print("watch vk: with lam capped the output slope must come from gds/vk; a small vk"
+    print("watch vk: with lam capped the output slope must come from the channel"
+          " (lam term only); a small vk"
           " with large sigma_rel means the knee shape is not pinned by this data"
           " (HANDOVER section 7 item 1).")
 
@@ -202,8 +210,9 @@ def main() -> None:
         "\nrd+rs is expected to sit BELOW the measured Rds(on) chord (34.5 mOhm):"
         " Rds(on) = rd + rs + intrinsic channel resistance. Only the SUM is"
         " identifiable (rd <-> rs ~ -0.999); do not quote the split as physical."
-        "\nksub is free but carries no information on this dataset (one off-state"
-        " point only) -- expect it to drift to a bound with sigma_rel = inf."
+        "\nksub is anchored by the single Vgs(th) point (3.7 V, 250 uA) via the"
+        " subthreshold channel -- the anchor, not the slope, is what this data"
+        " pins; a near-threshold transfer curve would pin the swing."
     )
     txt.write_text(head + tail)
     print(f"wrote {txt}")

@@ -162,14 +162,14 @@ def test_improved_model_has_no_negative_gds(vg):
 # ---------------------------------------------------------------- limiting cases
 def test_ohmic_limit_is_linear_in_vds():
     """Vds << Vk -> Id ~ kp*Vov*Vds (pure resistance)."""
-    p = DEFAULT.replace(theta=0.0, vsat=1e6, eta=0.0, lam=0.0, gds=0.0, gk=0.0)
+    p = DEFAULT.replace(theta=0.0, vsat=1e6, eta=0.0, lam=0.0, gk=0.0)
     i1 = float(vdmos_id(0.01, 10.0, p))
     i2 = float(vdmos_id(0.02, 10.0, p))
     assert i2 / i1 == pytest.approx(2.0, rel=1e-3)
 
 
 def test_level1_limit_agreement():
-    """theta = vsat = eta = gds = gk = lam = 0 -> smooth approximation of Level-1
+    """theta = vsat = eta = gk = lam = 0 -> smooth approximation of Level-1
     with m_triode = 1, NOT an exact copy.
 
     The soft drain variable v = Vk*tanh(Vds/Vk) rounds the hard corner, so the
@@ -185,7 +185,6 @@ def test_level1_limit_agreement():
         vsat=1e9,
         eta=0.0,
         lam=0.0,
-        gds=0.0,
         gk=0.0,
         vk=1e9,
         vov_floor=1e-9,
@@ -228,21 +227,33 @@ def test_subthreshold_is_smooth_and_positive():
 def test_subthreshold_slope_matches_ksub():
     """Deep subthreshold d ln(Id)/dVgs should approach 1/ksub (60 mV/decade-ish).
 
-    Only valid where the channel term dominates the gds*Vds leakage, i.e. well
-    below threshold but not so far down that the channel current underflows
-    relative to the drift term in float64.
+    The channel softplus is the ONLY off-state current (the gds*Vds leak term
+    was deleted, session 7), so the slope law holds at every Vds without a
+    leakage-dominance caveat.
     """
-    p = DEFAULT.replace(gds=0.0, gk=0.0)
+    p = DEFAULT.replace(gk=0.0)
     vg = np.linspace(1.0, 2.4, 60)
     ids = vdmos_id(1.0, vg, p)
     slope = np.polyfit(vg, np.log(ids), 1)[0]
     assert slope == pytest.approx(1.0 / p.ksub, rel=0.02)
 
 
-def test_off_state_drift_conductance_defined():
-    """gds*Vds term keeps a defined slope at Vgs = 0 (no floating off state)."""
+def test_off_state_is_gate_dependent_not_a_leak_resistor():
+    """No gds*Vds leak term: the off state is the gate-dependent softplus floor.
+
+    The drift-conductance term was deleted (session 7). On the ST8L65 data it
+    was a one-point parameter that absorbed the Vgs(th) spec point (250 uA at
+    Vgs = Vds = 3.7 V) with a GATE-INDEPENDENT leak, flattening the whole
+    subthreshold transfer curve to a constant floor. The softplus channel
+    already conducts below threshold with slope 1/ksub, which is the physical
+    off state; real HV leakage needs the body diode / leakage element, not a
+    fitted resistor.
+    """
     p = DEFAULT.replace(gk=0.0)
-    assert float(vdmos_id(20.0, 0.0, p)) == pytest.approx(0.02, rel=1e-3)
+    off = float(vdmos_id(20.0, 0.0, p))
+    assert 0.0 < off < 1e-9  # tiny but strictly positive, no floating off state
+    # gate-dependent: +2 V on the gate raises it by ~20 decades (exp(2/0.05))
+    assert float(vdmos_id(20.0, 2.0, p)) > 1e4 * off
 
 
 def test_kink_term_is_one_sided():
@@ -254,7 +265,7 @@ def test_kink_term_is_one_sided():
     p = DEFAULT
     off = float(vdmos_id(1.0, 0.0, p))
     assert off > 0.0
-    assert off == pytest.approx(p.gds * 1.0, rel=1e-3)  # drift only, kink ~ 0
+    assert off < 1e-12  # channel softplus floor only; kink contributes ~nothing
 
     # Above the onset (Vgs >> vthk) the sigmoid equals the old tanh gate exactly,
     # so the calibrated reference points are unchanged by this fix.
@@ -268,11 +279,11 @@ def test_kink_term_is_one_sided():
 def test_monotone_in_vgs_everywhere():
     """Id must never decrease with Vgs at any Vds.
 
-    Deep in subthreshold the channel current (~1e-16 A) is far below the
-    representable increment of the drift term (gds*Vds ~ 5e-5 A), so Id is
-    *constant* to float64 precision there rather than strictly rising. Hence
-    non-decreasing everywhere, strictly increasing once the channel term is
-    resolvable.
+    With the gds leak term deleted, Id is the channel current alone and stays
+    resolvable in float64 down to ~1e-47 A, but the softplus steps at the very
+    bottom of the grid are at the resolution edge, so keep non-decreasing
+    everywhere and strictly increasing once the channel term is comfortably
+    resolvable (Vgs >= 1.5 V).
     """
     vg = np.linspace(-2.0, 15.0, 400)
     for vd in (0.05, 1.0, 20.0, 100.0):

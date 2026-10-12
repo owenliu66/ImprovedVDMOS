@@ -49,7 +49,7 @@ never change Id,sat = ½·Kp·Vov². Consequences:
 | Id,sat ∝ Vov^α | α = 2.00, fixed | α = 1.08 at DEFAULT (Vgs 6–12 V); tunable across 1.2–1.6 with vsat ≈ 3–12 V, θ secondary |
 | Ron vs Id,sat coupling | locked together | independent |
 | Subthreshold | none (Id = 0 below Vto) | smooth softplus, slope → 1/ksub |
-| Off-state slope | undefined | gds·Vds |
+| Off-state slope | undefined | softplus subthreshold floor, gate-dependent |
 | Trench kink | none | one-sided sigmoid |
 | Gate-charge saturation (α collapse at high Vgs) | none | soft cap `kcap`, `m` (off by default) |
 
@@ -57,7 +57,6 @@ never change Id,sat = ½·Kp·Vov². Consequences:
 
 ```
 I_D = kp·Vov_eff·(v − v²/(2Vk)) / (1 + v/vsat) · (1 + λ·Vds·tanh(Vds/Vk))
-      + gds·Vds
       + gk·Vds·tanh((Vgs − Vth_k)/kk)·tanh(Vds/Vk)
 
 Vth     = Vth0 − η·Vds·tanh(Vds/Vk)              DIBL, bounded
@@ -67,7 +66,7 @@ Vk      = Vov_eff/(1 + θ·Vov_eff)                vertical-field mobility degra
 v       = Vk·tanh(Vds/Vk)                        soft drain variable (replaces the knee switch)
 ```
 
-Setting `θ = vsat = η = gds = gk = 0` makes the model a smooth approximation of
+Setting `θ = vsat = η = gk = 0` makes the model a smooth approximation of
 the Level-1 equations with `m_triode = 1`: the soft drain variable rounds the
 hard corner, so it is exact in the ohmic limit and in deep saturation but up to
 ~6 % low around the knee. Quantified by
@@ -103,6 +102,16 @@ and the fit made rd carry 75 % of the terminal voltage already at the ohmic
 Ron anchor (Vds = 0.483 V, Id = 14 A). The cap leaves rd a plain resistor and
 beat kappa on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and
 ~1000× better conditioning.
+
+### Off state
+
+Below threshold the softplus channel is the **only** current: Id falls
+gate-dependently with slope 1/ksub down to ~1e-13 A at Vgs = 0. The model used
+to add an ohmic `gds·Vds` drift-leakage term; it is deleted (session 7) — on
+real data it was a one-point parameter (100 % of the Vgs(th) spec point, <0.03 %
+of every other point) and a gate-independent constant floor that stole the
+threshold anchor from ksub/vth0. Real high-voltage leakage will come with the
+body diode / leakage element, not a fitted resistor.
 
 ### Package resistance (rd, rs)
 
@@ -178,7 +187,7 @@ print(res.summary())
 ## Fitting strategy
 
 1. **Relative weighting** first — treats subthreshold and high-current points
-   equally, so the low-current shape (vth0, ksub, gds) is not swamped.
+   equally, so the low-current shape (vth0, ksub) is not swamped.
 2. **Ampere weighting** second — makes the Ron / Rds(on) corner dominate, which
    is what datasheet specs actually pin down.
 3. Positive parameters are optimised in **log space** with physical bounds; this

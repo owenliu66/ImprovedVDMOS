@@ -23,10 +23,11 @@ from vdmos_fit import DEFAULT, Params, fit, make_synthetic, vdmos_id
 from vdmos_fit.model import _soft_cap
 
 # Best fit on the ST8L65N044M9 datasheet data (HANDOVER section 3b):
-# cap variant A + single rd, 9 free, RMSE 6.88 %.
+# cap variant A + single rd, 9 free, RMSE 6.88 %. (gds kwarg stripped in
+# session 7 when the leak term was deleted; the fitted gds was 6.8e-5 S.)
 FITTED = Params(
     kp=91.9481, vth0=4.7327, ksub=0.06, kcap=1.90909, m=9.86552,
-    theta=0.0, vsat=1e4, eta=0.0, lam=0.0383371, gds=6.75611e-5,
+    theta=0.0, vsat=1e4, eta=0.0, lam=0.0383371,
     gk=0.0, vthk=1.6, kk=0.1, vk=0.653951,
     rd=26.03e-3, rs=4.644e-3,
 )
@@ -117,7 +118,7 @@ def test_subthreshold_slope_untouched_by_cap():
     """Deep below threshold vov ~ ksub*exp((Vgs-Vth)/ksub) << kcap, so the cap
     is the identity there for ANY kcap > 0 and d ln Id/dVgs stays 1/ksub."""
     for kcap in (0.05, 1.0, 20.0):
-        p = DEFAULT.replace(gds=0.0, gk=0.0, kcap=kcap, m=10.0)
+        p = DEFAULT.replace(gk=0.0, kcap=kcap, m=10.0)
         vg = np.linspace(1.0, 2.4, 60)
         ids = vdmos_id(1.0, vg, p)
         slope = np.polyfit(vg, np.log(ids), 1)[0]
@@ -138,7 +139,7 @@ def test_no_ndr_with_fitted_cap():
 # ---------------------------------------------------------------- fitting
 CAPTRUTH = Params(
     kp=30.0, vth0=3.1, ksub=0.05, kcap=2.0, m=8.0,
-    theta=0.02, vsat=1.2, eta=0.03, lam=0.015, gds=2e-3,
+    theta=0.02, vsat=1.2, eta=0.03, lam=0.015,
     gk=0.0, vthk=1.6, kk=0.1, vk=10.0,
 )
 
@@ -151,7 +152,7 @@ def test_round_trip_recovers_cap():
     vds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0])
     data = make_synthetic(CAPTRUTH, vgs, vds, noise=0.005, seed=11)
 
-    free = ("kp", "vth0", "ksub", "kcap", "m", "theta", "vsat", "eta", "lam", "gds")
+    free = ("kp", "vth0", "ksub", "kcap", "m", "theta", "vsat", "eta", "lam")
     # Non-free params come from `start`: it must match the truth where params
     # are fixed (gk = 0!), or the kink sigmoid injects amps of phantom current.
     start = DEFAULT.replace(kp=30.0, gk=0.0, kcap=1.0, m=5.0)

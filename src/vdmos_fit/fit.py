@@ -290,7 +290,7 @@ def sensitivity_report(
     Cheap diagnostic for deciding what to fit at all: a parameter whose current
     value changes Id by <1e-3 relative across the whole data range cannot be
     extracted from it. For instance vthk only matters where the data actually
-    brackets the kink onset, and gds only matters in the off state.
+    brackets the kink onset.
 
     Parameters sitting at their (non-negative) lower bound -- rd, rs at 0 --
     get a one-sided probe of size `rel_step` in absolute units, and the

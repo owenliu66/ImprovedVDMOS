@@ -29,7 +29,7 @@ from vdmos_fit.params import BOUNDS, DEFAULT_FREE
 
 RTRUE = Params(
     kp=30.0, vth0=3.1, theta=0.02, vsat=1.2, eta=0.03, lam=0.015,
-    gds=2e-3, gk=0.3, vthk=1.5, rd=2e-3, rs=1e-3,
+    gk=0.3, vthk=1.5, rd=2e-3, rs=1e-3,
 )
 
 
@@ -57,7 +57,7 @@ def test_matches_independent_brentq_root():
     """Cross-validate the internal solver against scipy brentq (independent code)."""
     from vdmos_fit.model import _channel_current
 
-    p = DEFAULT.replace(theta=0.0, eta=0.0, lam=0.0, gds=0.0, gk=0.0, vsat=1e9,
+    p = DEFAULT.replace(theta=0.0, eta=0.0, lam=0.0, gk=0.0, vsat=1e9,
                         rd=2e-3, rs=1e-3)
     rtot = p.rd + p.rs
     vds, vgs = 0.01, 10.0
@@ -71,7 +71,16 @@ def test_matches_independent_brentq_root():
 
 
 def test_solver_self_consistency_on_grid():
-    """Returned Id must satisfy the fixed-point equation to <1e-8 relative."""
+    """Returned Id must satisfy the fixed-point equation to <1e-8 relative,
+    OR below the solver's absolute tolerance (atol = 1e-12 A).
+
+    Session 7 note: with the gds leak deleted, the deep off state sits at the
+    softplus floor (~1e-14 A on this grid), below atol. There the solver's
+    convergence criterion |g| <= atol + rtol*|Id| bounds the residual only
+    absolutely — demanding 1e-8 *relative* consistency at 1e-14 A would ask
+    for sub-attoampere accuracy the solver never promised. The mixed rule
+    below is exactly the solver contract plus the original relative bound.
+    """
     from vdmos_fit.model import _channel_current
 
     p = DEFAULT.replace(rd=2e-3, rs=1e-3)
@@ -80,14 +89,23 @@ def test_solver_self_consistency_on_grid():
     id_ = vdmos_id(vd2, vg2, p)
     mask = id_ != 0.0
     resid = np.abs(_channel_current(vd2 - rtot * id_, vg2 - p.rs * id_, p) - id_)
-    assert (resid[mask] / np.abs(id_[mask])).max() < 1e-8
+    assert np.all(resid[mask] <= 1e-12 + 1e-8 * np.abs(id_[mask]))
 
 
-def test_off_state_exact_series_fix():
-    """Vgs = 0 (channel off, gk = 0): Id = gds*Vds/(1 + gds*(rd+rs)) exactly."""
+def test_off_state_solves_to_channel_floor():
+    """Vgs = 0 with package R: Id is the tiny gate-dependent channel floor.
+
+    The old exactness check (Id = gds*Vds/(1 + gds*(rd+rs))) died with the gds
+    term (session 7). The solver must still converge self-consistently at the
+    softplus floor: ~1e-13 A at (Vds, Vgs) = (20, 0), so the package-R voltage
+    drops are ~1e-15 V and the terminal and internal currents agree.
+    """
+    from vdmos_fit.model import _channel_current
+
     p = DEFAULT.replace(gk=0.0, rd=5e-3, rs=5e-3)
-    exact = p.gds * 20.0 / (1.0 + p.gds * (p.rd + p.rs))
-    assert float(vdmos_id(20.0, 0.0, p)) == pytest.approx(exact, rel=1e-6)
+    id_ = float(vdmos_id(20.0, 0.0, p))
+    assert 0.0 < id_ < 1e-9
+    assert id_ == pytest.approx(float(_channel_current(20.0, 0.0, p)), rel=1e-6)
 
 
 def test_package_dominated_limit():
@@ -148,6 +166,11 @@ def test_solver_survives_newton_two_cycle():
     RuntimeError with a ~800 A residual. The stall detector forces bisection
     after three consecutive non-halving iterations.
 
+    The cliff is gate-degeneration physics, NOT the deleted gds leak: the same
+    parameter set without gds still lands in the stall band (Id(178) ~ 789 A)
+    and only passes with the guard. The gds kwarg was stripped from the set in
+    session 7; the pinned values below are the session-4 fit minus gds.
+
     The grid step matters: the stall band is ~177.8-178.7 V, so a coarse
     41-point sweep misses it entirely. 401 points (step 0.5 V) lands on it.
     """
@@ -155,7 +178,7 @@ def test_solver_survives_newton_two_cycle():
 
     p = Params(
         kp=91.9481, vth0=4.7327, ksub=0.06, kcap=1.90909, m=9.86552,
-        theta=0.0, vsat=1e4, eta=0.0, lam=0.0383371, gds=6.75611e-5,
+        theta=0.0, vsat=1e4, eta=0.0, lam=0.0383371,
         gk=0.0, vthk=1.6, kk=0.1, vk=0.653951, rd=26.03e-3, rs=4.644e-3,
     )
     rtot = p.rd + p.rs

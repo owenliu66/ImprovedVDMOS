@@ -1,7 +1,6 @@
 """Improved VDMOS channel current: one continuous expression, no triode/sat switch.
 
     I_D = kp*Vov_eff*(v - v^2/(2*Vk)) / (1 + v/vsat) * (1 + lam*Vds*tanh(Vds/Vk))
-          + gds*Vds
           + gk*Vds*tanh((Vgs - Vth_k)/kk)*tanh(Vds/Vk)
 
     Vth     = Vth0 - eta*Vds*tanh(Vds/Vk)          DIBL (bounded)
@@ -15,7 +14,7 @@ Limits
 Vds << Vk :  I_D -> kp*Vov_eff*Vds*(1 + ...)                   ohmic, m_triode = 1
 Vds >> Vk :  I_D -> 0.5*kp*Vov_eff^2*(0.5+th*Vov_eff)/(1+th*Vov_eff)^2 / (1+Vk/vsat)
 
-With theta = vsat = eta = gds = gk = 0 the model becomes a *smooth approximation*
+With theta = vsat = eta = gk = 0 the model becomes a *smooth approximation*
 of the Level-1 equations with m_triode = 1: exact in the ohmic limit (Vds/Vov -> 0)
 and in deep saturation (Vds/Vov >~ 5), but up to ~6 % low around the knee
 (Vds/Vov ~ 1), because v = Vk*tanh(Vds/Vk) rounds off the hard corner rather than
@@ -63,9 +62,21 @@ together: with a depleted pillar the pinch-off voltage is set by the depleted
 column, not by the surface charge. `kcap = 0` (default) is the exact identity and
 leaves every pre-cap anchor bit-identical.
 
+No drift-leakage term (gds deleted, session 7)
+----------------------------------------------
+The model used to carry an ohmic `gds*Vds` term for "drift/substrate output
+conductance". It is deleted: on the ST8L65N044M9 data it was a ONE-POINT
+parameter -- 100 % of the (Vgs = Vds = 3.7 V, 250 uA) current and < 0.03 % of
+every other point -- and that point is the Vgs(th) spec condition, i.e.
+subthreshold *channel* current the softplus term already models with slope
+1/ksub. A gate-independent leak flattened the whole subthreshold transfer curve
+to a constant floor and stole the threshold anchor from ksub/vth0. The physical
+off state is the gate-dependent softplus floor; real high-voltage leakage will
+come with the body diode / leakage element, not a fitted resistor.
+
 The implicit equation is solved with bracketed safeguarded Newton, NOT fixed-point
 iteration: in the ohmic region the fixed-point contraction factor is
-(rdp-rs)*kp*Vov, which exceeds 1 for realistic values (0.005 * 34.7 * 9 = 1.6 for
+(rd+rs)*kp*Vov, which exceeds 1 for realistic values (0.005 * 34.7 * 9 = 1.6 for
 DEFAULT) and would diverge. With rd = rs = 0 (the default) the explicit fast path
 is taken and results are bit-identical to the pre-package-R model.
 
@@ -139,18 +150,17 @@ def _channel_current(vds, vgs, p: Params) -> np.ndarray:
     ich /= 1.0 + v / p.vsat
     ich *= 1.0 + p.lam * vds * gate
 
-    # 7) Drift conductance and trench kink.
+    # 7) Trench kink.
     #    The kink gate must be a one-sided sigmoid, not tanh() itself: tanh is odd,
     #    so a bare tanh((Vgs-Vthk)/kk) injects NEGATIVE current below the kink onset
     #    (about -40 mA at Vgs = 0, Vds = 1 V for the nominal set), which is
     #    non-physical and can seed convergence problems in the off state.
     #    0.5*(1 + tanh(.)) is identical to tanh() once Vgs is a few kk above Vthk
     #    (tanh already saturates at 1.0 in float), and decays smoothly to zero below.
-    idrift = p.gds * vds
     kink_gate = 0.5 * (1.0 + np.tanh((vgs - p.vthk) / p.kk))
     ikink = p.gk * vds * kink_gate * gate
 
-    return ich + idrift + ikink
+    return ich + ikink
 
 
 def _soft_cap(vov, kcap: float, m: float):

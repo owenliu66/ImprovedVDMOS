@@ -67,7 +67,6 @@ class Params:
     vsat : float   Velocity-saturation knee [V]; sets Id,sat ~ Vov**alpha, alpha < 2.
     eta : float    DIBL coefficient [1/V].
     lam : float    Channel/drift-length modulation [1/V].
-    gds : float    Drift/substrate output conductance [S].
     gk : float     Trench kink (parasitic accumulation channel) conductance [S].
                    One-sided: contributes only for Vgs above vthk.
     vthk : float   Kink gate-onset voltage [V].
@@ -101,7 +100,6 @@ class Params:
     vsat: float = 1.5
     eta: float = 0.02
     lam: float = 0.02
-    gds: float = 1e-3
     gk: float = 0.4
     vthk: float = 1.6
     kk: float = 0.1
@@ -124,7 +122,7 @@ PARAM_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Params))
 # Parameters fitted in log space (strictly positive, span decades).
 # kcap is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
 LOG_PARAMS: frozenset[str] = frozenset(
-    {"kp", "ksub", "theta", "vsat", "eta", "lam", "gds", "gk", "kk", "vk", "m"}
+    {"kp", "ksub", "theta", "vsat", "eta", "lam", "gk", "kk", "vk", "m"}
 )
 
 # Physically sensible search bounds, same units as Params.
@@ -141,7 +139,6 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "vsat": (0.05, 100.0),
     "eta": (1e-5, 1.0),
     "lam": (1e-6, 5.0),
-    "gds": (1e-9, 10.0),
     "gk": (1e-12, 100.0),
     "vthk": (-5.0, 10.0),
     "kk": (1e-3, 5.0),
@@ -167,7 +164,6 @@ DEFAULT_FREE: tuple[str, ...] = (
     "vsat",
     "eta",
     "lam",
-    "gds",
     "gk",
     "vthk",
     "rd",

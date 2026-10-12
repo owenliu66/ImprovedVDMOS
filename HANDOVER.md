@@ -1,301 +1,219 @@
-# Handover — ImprovedVDMOS: cap refactor + docs COMPLETE, committed; next: ksub/vk degeneracy + bounded drain element (session 6)
+# Handover — ImprovedVDMOS: gds leak term DELETED (session 7). Code edits DONE, docs + pytest/ruff + commit PENDING.
 
-## 0x. SESSION 6 UPDATE (docs + commit DONE — read this first)
+## 0. READ THIS FIRST — where session 7 stopped
 
-- **§1d docs DONE:** `README.md` (Vov_eff in the equation block, new
-  "Gate-overdrive charge cap" subsection, stall-guard paragraph in the
-  package-R section, test count, comparison-table row);
-  `src/vdmos_fit/STATUS.md` (problem 6 closed, problem 9 updated, new
-  "Gate-overdrive cap (kcap, m) — sessions 4+5" section with the fit A/B
-  table and the five new open problems, verified state updated);
-  `data/README.md` (new "Datasets" section: ST8L65 provenance — digitised
-  25 °C pulsed, 0–20 V, spec anchors, kept Vgs=5 duplicate, removed 650 V
-  off point, Figure 3 not on disk).
-- **Committed** (see `git log`): everything except `.vscode/` (left
-  untracked — user's call), including the root `STATUS.md` deletion.
-- **Discrepancy vs session-5 §8/§9:** the working tree also contained
-  `fit.py` + `test_fit.py` + `test_package_r.py` changes that the session-5
-  handover did NOT list — the identifiability dead-column fix (relative
-  1e-5-of-max tolerance; correlations/cond over live columns only) and its
-  test, plus the Newton two-cycle stall test. All included in the commit.
-  Consequence: the §3 "ksub↔vk = ±1.000, cond ~2e9" numbers were measured
-  with the OLD tolerance; ksub's column is actually dead (7.8e-7 of max,
-  pinning leaves the fit identical). Queue item 2 (fix ksub / tie vk, rerun,
-  expect cond ~1e4–1e5) stands and now also re-measures identifiability.
-- **Re-verified before commit:** 86 passed, 1 skipped (digitizer test needs
-  a Tk display), ruff clean. (Session-5's "85 + 1" predates the two extra
-  tests.)
-- **Next-session queue = §7 items 2–6 below, unchanged** (item 1 done).
+Task: "delete everything that doesn't make physical sense", starting with the
+`gds·Vds` drift-leakage term (reverse leakage will be a body-diode/leakage
+element later; not enough data to model it now). Hypothesis: deleting gds lets
+ksub capture subthreshold/near-threshold conduction. **Confirmed by probes.**
 
----
+Status when tokens ran out:
+- **Probes (steps 1–3): DONE**, results in `out/` (see §3).
+- **Step 5 code edits: DONE** (model/params/data/fit + all 4 test files + both
+  scripts). See §1.
+- **Step 5 docs: NOT DONE.** README.md, src/vdmos_fit/STATUS.md, data/README.md
+  still mention gds. Exact edits listed in §2.
+- **pytest + ruff: NOT RUN** since the code edits. Run before commit.
+- **Commit 1 (gds deletion): NOT DONE.**
+- **Step 6 (on_bounds bug fix + test): NOT DONE.** Plan in §4.
+- **Fits/plots: SKIPPED** (user: not enough tokens). `out/st8l65_capfit_params.txt`
+  is now STALE (10-param, still has gds). The authoritative gds=0 fit numbers are
+  in `out/nogds_probe.txt`. Re-running `scripts/fit_st8l65.py` (now 9-param) is a
+  next-session task, not done.
 
-## 0. READ THIS FIRST — the tree is GREEN and complete except docs
-
-Session 4's half-applied refactor is **finished**. `params.py`, `model.py`,
-`scripts/fit_st8l65.py` and the new `tests/test_gate_cap.py` are all done and
-verified. Both pending fits (§2 decision 5: with / without the Vgs = 5 curve)
-have been **run** — results in §3 below, which *change* the open-problem list.
-
-- **pytest: 85 passed, 1 skipped** (78 old + 7 new `test_gate_cap.py`).
-- **`ruff check .` clean.**
-- Everything is **still uncommitted** (§9). Commit is safe now — but see §1c:
-  the model contains one change *beyond* session 4's spec (solver stall guard).
-
-Still to do: **§1d docs only** (README + STATUS still describe `kappa`), then
-commit. Everything else from session 4's §1 is done.
+Git: HEAD is session-6 commit `addd7ca` (cap + docs + commit). Working tree has
+uncommitted gds-deletion edits to: `src/vdmos_fit/{model,params,data,fit}.py`,
+`tests/{test_model,test_package_r,test_fit,test_gate_cap}.py`,
+`scripts/{fit_st8l65,roundtrip_demo}.py`. `.vscode/` still untracked (user's call).
 
 ---
 
-## 1. What was implemented this session (exactly)
+## 1. What was implemented this session (code, DONE)
 
-### 1a. `model.py` — DONE, plus one addition beyond the session-4 spec
+Deleted the `gds` parameter and its `gds·Vds` term everywhere:
 
-All three session-4 edits applied verbatim:
-- `vdmos_id` no longer passes `kappa` to `_solve_package_r`.
-- `_channel_current`: `vov = _soft_cap(vov, p.kcap, p.m)` inserted after the
-  softplus, **in place**, before `vknee` (variant A — charge and knee saturate
-  together).
-- `_soft_cap` added (log-space form, `kcap <= 0` → identity, bit-identical).
-- `_solve_package_r`: `kappa` kwarg, `kappa < 0` guard, bound (b), the residual
-  split, the `dudI` branch and the pole comment all deleted. Docstring updated.
-  The `moved` progress test kept.
+- **`model.py`**: removed `idrift = p.gds * vds` from `_channel_current`
+  (`return ich + ikink`); removed `+ gds*Vds` from the module-docstring equation
+  block; changed "theta = vsat = eta = gds = gk = 0" → "…= gk = 0"; added a
+  "No drift-leakage term (gds deleted, session 7)" docstring section explaining
+  the one-point-parameter finding. Also fixed a pre-existing typo
+  `(rdp-rs)*kp*Vov` → `(rd+rs)*kp*Vov`.
+- **`params.py`**: removed the `gds` field (was default `1e-3`), its docstring,
+  its `BOUNDS` entry `(1e-9, 10.0)`, its `LOG_PARAMS` membership, and its
+  `DEFAULT_FREE` entry. DEFAULT_FREE now 10 names (kp,vth0,theta,vsat,eta,lam,
+  gk,vthk,rd,rs).
+- **`data.py`**: removed `gds=2e-3` from `example_dataset()`'s truth.
+- **`fit.py`**: removed the "gds only matters in the off state" clause from the
+  `sensitivity_report` docstring.
+- **`tests/test_model.py`**: stripped `gds=0.0` from the ohmic-limit,
+  level1-limit, subthreshold-slope and ksub tests; **renamed**
+  `test_off_state_drift_conductance_defined` → `test_off_state_is_gate_dependent_not_a_leak_resistor`
+  (asserts 0 < Id(20,0) < 1e-9 and gate-dependence: Id(20,2) > 1e4·Id(20,0));
+  kink one-sided test now asserts off < 1e-12 instead of `== gds*1.0`;
+  monotone-in-vgs docstring updated (channel-only, resolvable to ~1e-47 A).
+- **`tests/test_package_r.py`**: stripped gds from RTRUE and the brentq test;
+  **renamed** `test_off_state_exact_series_fix` → `test_off_state_solves_to_channel_floor`
+  (off-state Id is now the softplus floor, self-consistent through package-R,
+  0 < Id < 1e-9, terminal ≈ internal); stall-guard test params stripped of gds
+  (still passes: verified Id(178,10) ≈ 789 A, max rel resid 8.9e-11 — the
+  two-cycle cliff is gate-degeneration physics, NOT the deleted leak).
+- **`tests/test_fit.py`**: stripped gds from TRUTH, bounds test, uncertainty-set
+  assert, legacy_free (now 8 names), and the dead-parameter test (free tuple now
+  7 names; the "genuinely sensed but weak stays live" witness switched from gds
+  to eta, σ≈12).
+- **`tests/test_gate_cap.py`**: stripped gds from FITTED, CAPTRUTH, the
+  subthreshold-untouched test, and the round-trip free tuple (now 9 names).
+- **`scripts/fit_st8l65.py`**: FREE now 9 names (kp,vth0,ksub,lam,rd,rs,vk,kcap,m);
+  removed `GDS_OFF`; docstring rewritten (off point now anchors ksub/vth0 via
+  subthreshold channel); `report()` now prints the Vgs(th) point (3.7,3.7)
+  current; tail note updated.
+- **`scripts/roundtrip_demo.py`**: stripped gds from TRUTH and the print loop.
 
-**NEW (not in session 4's plan) — Newton two-cycle stall guard.** The
-no-NDR test (Vds to 200 V, fitted params, rd = 26 mΩ) exposed a *real* solver
-stall mode that `kappa` was not the only source of: at Vds ≈ 178 V the
-bracketed Newton enters a **two-cycle** — `g(Id)` is nearly flat (slope ≈ −1.2)
-at both bracket endpoints with a steep gate-degeneration cliff in between
-(`rs·Id` dropping the internal gate across the cap knee), so Newton maps each
-endpoint into the other's neighbourhood and the bracket shrinks only ~1e-5 per
-iteration (fails at 60 iterations with residual ~854 A). Fix: a per-point
-`stall` counter — if the bracket width fails to shrink by 10 % three
-consecutive times, Newton is vetoed and bisection forced until progress
-resumes. ~6 lines in `_solve_package_r`; does not change any converged result
-(all 78 pre-existing tests still pass bit-identically). **This is the honest
-replacement for the deleted pole-avoidance machinery: the pole is gone, but
-flat-then-cliff `g(Id)` shapes survive the cap and need the stall guard.**
-
-### 1b. `scripts/fit_st8l65.py` — DONE (full rewrite, zero `kappa` refs)
-
-- Free set = session-4 §4: `kp, vth0, ksub, lam, gds, rd, rs, vk, kcap, m`.
-- `DEVICE_BOUNDS = {"rd": (0, 0.036), "rs": (0, 0.036), "lam": (1e-6, 0.004)}`
-  via `bounds_overrides` — global `BOUNDS` untouched.
-- Fixed at start: `theta=0, vsat=1e4, eta=0, gk=0, vthk=1.6, kk=0.1`
-  (measured dead, session-4 §3e). `kcap`/`m` freed explicitly per device.
-- 4 multi-starts around the session-4 basin + different vk/kcap/m basins.
-- The "fully free / widened bounds" run stays deleted (session-4 §6).
-- Runs **fit A** (full 41 pts) and **fit B** (Vgs = 5 curve dropped, 36 pts)
-  — session-4 §2 decision 5, now DONE.
-- Outputs: `out/st8l65_capfit.png`, `out/st8l65_capfit_params.txt`.
-  (Session-4's `out/gate_cap_vs_kappa.png` etc. are stale — they show the old
-  unconstrained-lam fit; regenerate plots from the new script if needed.)
-
-### 1c. `tests/test_gate_cap.py` — DONE (7 tests, all green)
-
-Covers everything session-4 §1c asked: kcap=0 bit-identity (Params-level +
-through the package-R solver), `0 <= dVov_eff/dVov <= 1` across
-vov∈[1e-6,50]×kcap∈[0.1,20]×m∈[0.5,40], monotonicity + asymptote, subthreshold
-slope = 1/ksub for any kcap>0, **no NDR** for Vds∈[0,200] at Vgs=10 with the
-fitted params (this is what forced the stall guard, §1a), no inf/NaN at
-kcap=0.05/m=40/vov=50 and vov=1e6, synthetic round-trip (kcap=2.0, m=8 →
-recovered to 0.1 % / 0.2 %).
-
-**Corrections to the session-4 test spec (verified numerically, do not
-"fix" the tests back):**
-1. The asymptote bound `kcap*(kcap/vov)**m` in §1c is **wrong for m < 1**.
-   Leading term is `(kcap/m)*(kcap/vov)**m` (Bernoulli); m=0.5 violates the
-   §1c constant by 1.34× at u = vov/kcap = 10. Test uses `kcap/m` factor.
-2. Near the asymptote the true error falls below float64 resolution of kcap
-   (m=40: u^-m ~ 1e-30 << eps), and `err = kcap - capped` is computed by
-   cancellation. Test adds an `8*eps*kcap` floor to the bound and allows
-   ±8 eps on monotonicity/ceiling. `_soft_cap` itself rounds ~1 ulp *over*
-   kcap at extreme u (0.050000000000000050) — harmless, pinned in the test.
-3. Round-trip start **must set `gk=0`**: `fit()` takes non-free params from
-   `start`, and DEFAULT's `gk=0.4` injected ~7.7 A of phantom kink current
-   (RMSE 3166 %). Same gotcha class as session 4 §10 ("plumbing silently
-   lies").
-
-### 1d. Docs — **NOT DONE. This is the only remaining implementation task.**
-
-- `README.md`: the Model section still omits the cap entirely; add
-  `Vov_eff = Vov/(1+(Vov/kcap)**m)**(1/m)` to the equation block + a short
-  "Gate-overdrive charge cap" subsection (physical picture is already written
-  in `params.py`/`model.py` docstrings — reuse it). Mention the cap preserves
-  `dg/dId <= -1` and that the solver has a stall guard.
-- `src/vdmos_fit/STATUS.md`:
-  - Problem 6 ("no real datasheet data") — **close it**: `data/ST8L65N044M9_IV.csv` exists (41 pts).
-  - Add a "Gate-overdrive cap (kcap, m) — session 4+5" section: cap replaces
-    `kappa` (6.88 % vs 7.45 % with full rank, session-4 §3a/§5), the
-    bit-identity guarantee, the stall guard, and the **new §3 results below**.
-  - Note the root `STATUS.md` deletion is still unstaged (session-4 §0).
-  - Update "Verified state": 85 passed + 1 skipped, ruff clean.
-- `data/README.md` — check it describes the ST8L65 CSV provenance (digitised,
-  25 °C pulsed, 0–20 V, the removed 650 V off point).
+### Verified numerically BEFORE the edits (so the next session need not re-derive)
+With DEFAULT at gds=0 (simulating the deletion), every reference anchor still
+passes its existing tolerance — **no anchor table needs changing**:
+- Ron @Vgs=10 = 4.271 mΩ (test wants 4.27±0.02) ✓
+- Id,sat(20V) = 31.448 / 91.017 / 157.061 / 225.879 / 297.670 A
+  (test table 31.5/91.0/157.1/225.9/297.7, rel 0.01) ✓
+- α = 1.0781 (test 1.08±0.01) ✓
+- Level-1/improved ratio @Vgs 10/11/12 = 4.2518 / 4.7997 / 5.3334
+  (refs 4.25/4.80/5.33, rel 5e-3) ✓
+- off Id(20,0) = 9.76e-14 A; monotone-in-Vgs still holds (strictly >0 from
+  Vgs=1.5 at all Vds) ✓
+- legacy-8 theta↔vsat pair still reported (cond 247) ✓
+- dead-param rewrite: ksub still inf/dead, eta live (σ 12.5), rank 6/7 ✓
 
 ---
 
-## 2. Decisions (unchanged from session 4 — settled, do not re-litigate)
+## 2. PENDING docs — exact edits to make (then pytest + ruff + commit 1)
 
-1. **Variant A** (cap before Vk). 2. **rd, rs ≤ 36 mΩ per device** (implemented).
-3. **ksub free; theta/vsat/eta fixed** (implemented). 4. **lam ≤ 0.004 1/V**
-   (implemented). 5. Two fits with/without Vgs=5 (**done, §3**).
-6. Vgs=5 duplicate Id points are real data; all data 25 °C pulsed; no
-   Rds(on)-vs-Vgs curve in the datasheet.
+### README.md (user-specified, do exactly these)
+1. Comparison table row: `| Off-state slope | undefined | gds·Vds |`
+   → `| Off-state slope | undefined | softplus subthreshold floor, gate-dependent |`
+2. Equation block: delete the `      + gds·Vds` line.
+3. "Setting `θ = vsat = η = gds = gk = 0` makes…" → drop `gds` from that list.
+4. Fitting strategy 1: "the low-current shape (vth0, ksub, gds) is not swamped"
+   → "(vth0, ksub)".
+5. Add a short **"Off state"** note after the "Gate-overdrive charge cap"
+   subsection: the `gds·Vds` leak term was deleted (session 7); on the ST8L65
+   data it was a one-point parameter (100 % of the 250 µA Vgs(th) point, <0.03 %
+   of every other point) that flattened the subthreshold curve to a
+   gate-independent floor and stole the threshold anchor from ksub. The physical
+   off state is now the gate-dependent softplus floor (slope 1/ksub); real HV
+   leakage will come with the body diode / a dedicated leakage element, not a
+   fitted resistor.
 
----
+### src/vdmos_fit/STATUS.md
+- **Close problem 5** ("gds σ ≈ 455 % — only the off-state constrains it"):
+  mark RESOLVED — the gds term was deleted (session 7), so the problem is moot.
+- Add a **"gds leak term deleted — session 7"** section: the one-point-parameter
+  evidence, the gate-independent-floor flaw, that ksub becomes live (σ 3.5) and
+  cond drops 2.2e9 → 3.7e4 on fit B when gds is removed (see out/nogds_probe.txt),
+  and that all DEFAULT anchors survive unchanged (list them, §1 above).
+- Update "Verified state" test count **after you run pytest** (was 86 passed,
+  1 skipped; the gds edits renamed tests but should not change the count —
+  confirm).
+- Note the sessions-4+5 fit table's gds row and rank/cond are superseded by the
+  gds=0 probe (out/nogds_probe.txt); a fresh 9-param `fit_st8l65.py` run is due.
 
-## 3. NEW RESULTS — the lam-capped fits (this session, `out/st8l65_capfit_params.txt`)
+### data/README.md
+In the "Datasets / ST8L65N044M9_IV.csv" section:
+- "the only off-state point, anchors gds ≈ 68 µS" → "anchors ksub/vth0 through
+  the subthreshold channel (the gds leak term was deleted, session 7)".
+- The "Removed point" bullet: "the channel model has no HV leakage term, and one
+  gds cannot give both 1 µA at 650 V and 250 µA at 3.7 V" → reword without gds:
+  no HV leakage element exists yet; real leakage waits for the body diode.
 
-Both fits: all 4 multi-starts converged to the **same basin** (no basin
-hopping — the cap + capped lam made the landscape tame).
-
-| | fit A (full, 41 pts) | fit B (no Vgs=5, 36 pts) |
-|---|---|---|
-| RMSE_rel | **9.17 %** | **5.54 %** |
-| kp | 63.59 | 50.60 |
-| vth0 | 4.6656 | 4.4460 |
-| ksub | 0.02336 | 0.02645 |
-| lam | **0.004 PINNED UPPER** | **0.004 PINNED UPPER** |
-| gds | 6.766e-5 S | 6.757e-5 S |
-| rd | 31.92 mΩ | 29.85 mΩ |
-| rs | 3.8e-9 **PINNED LOWER** | 0.66 mΩ |
-| vk | **4.245** | **5.562** |
-| kcap | 2.610 V | 2.904 V |
-| m | 6.203 | 10.241 |
-| rd+rs | 31.92 mΩ | 30.51 mΩ (chord 34.5 mΩ) |
-| plateau Vgs=10 @19.7 V | **226.4 A** (meas 240.2, −5.7 %) | **223.9 A** (−6.8 %) |
-| rank / cond | 10/10 / **3.1e9** | 10/10 / **2.2e9** |
-| per-curve % | 3.7:0.13, 5:21.26, 6:6.03, 7:2.48, 8:6.04, 9:6.10, 10:6.84 | 3.7:0.0, 6:5.83, 7:2.02, 8:6.12, 9:6.10, 10:6.30 |
-| Vgs≥6 only | 5.83 % | 5.62 % |
-
-σ_rel (fit A): kp 3.5, vth0 0.52, ksub 5.8e-4, lam 15.6, gds 4.0, rd 0.027,
-rs 0.036, **vk 112**, kcap 5.3, m 5.0. Correlations >0.8: kp↔vth0 +0.98,
-kp↔rs +0.96, kp↔kcap −0.97, vth0↔rs +0.95, vth0↔kcap −0.97,
-**ksub↔vk ±1.000**, rs↔kcap −0.98.
-
-### What these numbers say (the new open problems, replacing session-4 §7)
-
-1. **lam is pinned at its 0.004 bound in both fits** — the data wants more
-   output slope than the cap allows. Consequence: the plateau is now **5–7 %
-   LOW** (226/224 A vs 240 A), the mirror image of session 4's problem (then
-   β was too steep at high Vgs). Session-4 §7 item 2 predicted the
-   degradation: 6.88 % → 9.17 % full / 5.6 % on Vgs≥6. The honest conclusion
-   is forming that a **bias-dependent drain element is genuinely needed** —
-   but *not* `kappa` (pole, divider physics). Candidates: the `rdrift`+`kappa`
-   variant was 2.85 % on Vgs≥6 (session-4 §3a) but reintroduces the pole;
-   a *bounded* bias-dependent rd (e.g. `rd*(1+kd*Vds)` with the same
-   `dV/dI <= 1` discipline, or JFET-style depletion of rd) is the cleaner
-   next experiment. **Not yet tried.**
-2. **ksub ↔ vk correlation = ±1.000 and cond jumped 3.8e4 → ~2e9.** ksub is
-   no longer "dead" (session-4 §3e): with vk free and lam capped, the softplus
-   floor and the tanh gate trade off exactly (σ(ksub)=5.8e-4 is meaningless —
-   the pair is degenerate, not pinned). ksub drifted to 0.023–0.026 (mid-box,
-   not to a bound, so session-4 §7 item 3's "expect inf σ" did not happen —
-   the degeneracy is with vk instead). **Recommendation for next session: fix
-   ksub (e.g. 0.05 or from a subthreshold spec if one exists) or tie vk to Vk;
-   re-measure cond.** The three-gate coupling of vk (DIBL/CLM/kink all use
-   `tanh(Vds/vk)`) is still unexamined (session-4 §7 item 1).
-3. **vk rose 0.65 → 4.2–5.6 V** — the knee is now much softer, consistent
-   with the user's "knee too sharp" observation (session-4 §7 item 1). The
-   capped-lam refit largely fixed the knee *shape* complaint at the cost of
-   the plateau level (item 1 above). σ(vk) ≈ 112–150: still barely sensed.
-4. **Vgs=5 curve costs 21.3 % on fit A** (session-4 §3f stands: unreproducible
-   by any C1 model). Fit B (5.54 %) is the fair model-quality number.
-5. **rs pinned at 0 in fit A** (fit B: 0.66 mΩ) — rd/rs split still
-   unidentifiable; quote only rd+rs ≈ 30–32 mΩ.
+### After docs
+`python -m pytest` (expect ~86 passed, 1 skipped) and `python -m ruff check .`
+must be clean, then **commit 1**: "delete gds drift-leakage term; off state is
+the gate-dependent softplus floor". Stage everything except `.vscode/`.
 
 ---
 
-## 4. Parameter table — unchanged from session-4 §4
+## 3. Probe results (DONE, in out/) — the evidence for the deletion
 
-Global `params.BOUNDS`; ST8L65 overrides `rd, rs ≤ 0.036`, `lam ≤ 0.004`.
-Free (10): `kp, vth0, ksub, lam, gds, rd, rs, vk, kcap, m`. Fixed:
-`theta=0, vsat=1e4, eta=0, gk=0, vthk=1.6, kk=0.1, vov_floor=1e-3`.
-`kcap` linear space (0 = off, never log); `m` log. `kappa` DELETED.
+- `out/baseline_with_gds.txt` — copy of the with-gds fit A/B (session 6).
+- `out/nogds_probe.txt` — multi-start refit with gds fixed at 0 (term still in
+  code, just not free), 4 starts × {fit A, fit B}.
+- `out/nogds_probe_fitB.json` — best gds=0 fit-B params.
+- `out/nogds_subthreshold.png` — log Id(Vgs) @Vds=50 mV, gds=0 vs gds-kept.
 
----
+**Fit B (36 pts, no Vgs=5) — every criterion passes, all 4 starts → one basin:**
+RMSE 5.54 % (identical to with-gds); off point hit exactly (250.0 µA via the
+softplus channel, not a leak); **ksub now LIVE σ=3.46** (was dead, σ=inf);
+Jacobian rank 9/9, **cond 3.75e4** (was 10/10, cond 2.2e9 — gds was pure
+degeneracy); plateau 223.9 A (−6.8 %, unchanged); Vgs≥6 5.62 %. ksub=0.1836,
+kp 50.58, vth0 4.4459, vk 5.562, kcap 2.904, m 10.24, rd 29.85 mΩ, rs 0.66 mΩ.
+lam still pinned UPPER 0.004 (unchanged open problem).
 
-## 5. Why the cap replaced `kappa` — unchanged, keep for docs
+**Fit A (41 pts, with the anomalous Vgs=5 curve) — the known casualty:** RMSE
+9.17 → 9.97 %, off point abandoned (0 µA), ksub dead (σ=inf), rank 8/9. The
+Vgs=5 curve's steep 5→6 V gate slope fights the 250 µA anchor; gds was the cheat
+that decoupled them. Per decision 6 (Vgs=5 curve is real data but unreproducible
+by any C¹ model) fit B is the fair number, so this does not block deletion.
 
-See session-4 text preserved in `model.py`/`params.py` docstrings (already
-written there — copy into README/STATUS for §1d): `kappa` was a voltage
-divider (`Id → Vds/(rd(1+κVds))`), not a charge limit; the fit made rd carry
-75 % of terminal voltage at the 0.483 V Ron anchor. The cap is the charge-side
-mechanism (finite free charge in the SJ pillars), leaves rd a plain resistor,
-keeps `0 <= dVov_eff/dVov <= 1` (solver bracket invariant survives), and
-removes the `u(Id)` pole. Cap beats kappa: 6.88 % vs 7.45 % (session 4,
-unconstrained lam), full rank, ~1000× better conditioning.
+**Subthreshold plot:** gds=0 curve is monotone, floor 1.4e-13 A, crosses 247.9 µA
+at Vgs=3.7 V. gds-kept curve has a flat gate-independent 3.38 µA floor (slope
+∞ mV/dec) — the physically wrong shape the deletion removes.
 
----
-
-## 6. Do NOT re-run the "fully free, widened bounds" fit — still cancelled
-
-Session-4 §6 stands. The crash (`RuntimeError ... 192 A`) was the `u(Id)`
-pole; deleting `kappa` removed it. The stall guard (§1a) handles the residual
-two-cycle mode; do not "improve" the solver further without a failing test.
-
----
-
-## 7. Next-session queue (in priority order)
-
-1. **§1d docs** (README + STATUS + check data/README) — the only unfinished
-   session-4 task. Then **commit** (§9).
-2. **Break the ksub↔vk degeneracy** (§3 item 2): fix ksub or tie vk↔Vk;
-   re-run `scripts/fit_st8l65.py`; cond should drop back to ~1e4–1e5.
-3. **Bounded bias-dependent drain element** to un-pin lam and fix the −6 %
-   plateau (§3 item 1). Design constraint: keep `dV_element/dId` bounded so
-   the bracket invariant survives; do NOT resurrect `kappa` as-is.
-4. α/β ladders (session-4 §3c/§3d) against the *new* fit B params — the β
-   ladder should now be too *shallow* at high Vgs (mirror of before); verify.
-5. Datasheet Figure 3 (typical output curves, 25 °C) was **not saved to disk**
-   — ask the user for it again when checking knee shape.
-6. Body diode / reverse polarity (STATUS problem 7) still the biggest model
-   hole; package-R path is Vds ≥ 0 only.
+**Honest caveat:** gds=0 fit B gives ksub=0.184 V ⇒ ~423 mV/decade swing, not
+physical (real ~60–100 mV/dec). With only ONE off-state point the data pins the
+250 µA anchor, not the slope; ksub's σ=3.5 overstates what we know. Do NOT
+hard-fix ksub to 0.05 to force physicality — that pushes the anchor into vth0.
+A near-threshold transfer curve (data wish) would pin the real swing.
 
 ---
 
-## 8. Files touched this session
+## 4. Step 6 — on_bounds false-positive bug (PENDING, separate commit)
 
-**Modified:** `src/vdmos_fit/model.py` (cap + `_soft_cap` + kappa removal +
-stall guard), `scripts/fit_st8l65.py` (full rewrite).
-**Created:** `tests/test_gate_cap.py`.
-**Generated (gitignored):** `out/st8l65_capfit.png`, `out/st8l65_capfit_params.txt`.
-**Unchanged this session:** `params.py` (was already done), all other tests.
-**Still to touch:** `README.md`, `src/vdmos_fit/STATUS.md`, maybe `data/README.md`.
+`FitResult.on_bounds(rel_tol=1e-3)` in `src/vdmos_fit/fit.py` flags a param as
+pinned if `abs(val - lo) <= rel_tol * max(span, abs(lo), 1e-12)`. With a wide
+span this is a huge absolute tolerance: gds span was (1e-9, 10.0) → span 10 →
+tol 1e-2 S, so **any gds < 0.01 S read "pinned LOWER"** even at 6.8e-5 (a false
+positive seen in the session-6 fit output). After the gds deletion the bug still
+mis-scales for other wide-span params.
 
-## 9. Git state — NOTHING COMMITTED YET
+Fix: make the pinned test relative to the bound's own magnitude / a per-param
+scale, not the full span. E.g. compare `abs(val-lo) <= rel_tol * max(abs(lo),
+abs(val), <small floor>)` for the lower bound (and symmetric for upper), so a
+param at 6.8e-5 with lo=1e-9 is NOT called pinned, while rs=3.8e-9 with lo=0
+(span 0.036) IS (genuinely at zero). Add a test: a param that lands well inside
+a wide box must not be flagged; a param genuinely at a bound must be. Verify
+lam=0.004 (UPPER 0.004, real) and rs=0 (LOWER 0, real) still flag correctly.
+Commit separately from the gds deletion.
 
-```
-## main...origin/main
- M HANDOVER.md          (session 4's notes; now replaced by this file)
- D STATUS.md            (root; moved to src/vdmos_fit/STATUS.md — still unstaged since session 3)
- M src/vdmos_fit/model.py
- M src/vdmos_fit/params.py
- M scripts/fit_st8l65.py
-?? tests/test_gate_cap.py
-?? .vscode/             (leave uncommitted or gitignore — user's call)
-```
-Commit is safe now (85 passed, 1 skipped, ruff clean). Suggested: stage
-everything except `.vscode/`, one commit "remove kappa, add gate-overdrive
-charge cap (kcap,m) + solver stall guard; ST8L65 cap fits". Add the root
-STATUS.md deletion (`git rm STATUS.md` equivalent) to the same commit.
+---
 
-## 10. Gotchas (carry over + new)
+## 5. Next-session queue after §2/§4 (unchanged from session 6 §7 items 2–6)
 
-- All session-4 §10 gotchas still apply: `sys.executable -m pytest` (base
-  Python lacks pytest/ruff); frozen `Params` + `Params(**d)` splat; print one
-  model current before trusting an RMSE; `identifiability(res, free)` needs
-  the same `free` as `fit`; package-R is Vds ≥ 0 only; re-anchor START per
-  device; kcap linear-space, "off" = not in free set.
-- **NEW: `fit()` takes non-free parameters from `start`, not from DEFAULT or
-  the truth** — a start with the wrong fixed params (e.g. `gk=0.4` when the
-  truth has `gk=0`) silently poisons the fit (3166 % RMSE). Always build
-  `start` from the truth's fixed values.
-- **NEW: the bracketed Newton can two-cycle** on flat-then-cliff `g(Id)`
-  (gate degeneration across the cap knee). The stall guard in
-  `_solve_package_r` is load-bearing; `test_no_ndr_with_fitted_cap` fails
-  without it (Vds ≈ 178 V).
-- **NEW: asymptote of the soft cap is `(kcap/m)(kcap/vov)^m`**, not
-  `kcap(kcap/vov)^m`, for m < 1.
-- Near-asymptote comparisons of the cap hit float64 cancellation floors
-  (eps·kcap); don't chase "violations" at the 1e-16 level.
+1. Re-run `scripts/fit_st8l65.py` (now 9-param, gds gone) → regenerate
+   `out/st8l65_capfit.png` + `out/st8l65_capfit_params.txt`; expect fit B ≈ 5.5 %,
+   cond ~1e4, ksub live. Update the STATUS fit table with the real new numbers.
+2. Break the ksub↔vk degeneracy / decide ksub handling now that it's live but
+   one-point-anchored (fix from a subthreshold spec if you can digitise a
+   near-threshold transfer curve).
+3. Bounded bias-dependent drain element to un-pin lam and fix the −6 % plateau
+   (keep dV_element/dId bounded so the package-R bracket invariant survives; do
+   NOT resurrect kappa as-is).
+4. α/β ladders vs the new fit B params (β ladder should now be too shallow at
+   high Vgs — verify).
+5. Datasheet Figure 3 (typical output curves, 25 °C) still not on disk — ask the
+   user before checking knee shape.
+6. Body diode / reverse polarity (STATUS problem 7) — biggest model hole; the
+   package-R path is Vds ≥ 0 only. This is now also where HV leakage belongs.
+
+## 6. Gotchas (carry over + new this session)
+- `fit()` takes non-free params from `start`, not DEFAULT/truth — build start
+  from the truth's fixed values (gk=0 gotcha still live).
+- New: the gds term is GONE. Any code/test/script that passes `gds=` to Params
+  now raises TypeError. All in-repo uses were removed; watch notebooks/ and any
+  external scripts.
+- New: DEFAULT anchors (Ron 4.27 mΩ, sat table, α=1.08, L1 ratios) are unchanged
+  by the deletion — verified, do not "fix" them.
+- New: fit B ksub=0.184 V is an anchor-fit artifact of one off-state point, not a
+  physical swing; don't over-constrain it.
+- `python -m pytest` / `python -m ruff` with the venv interpreter
+  (`.../engineering313/Scripts/python.exe`), not base Python.
+- out/ is gitignored; the stale `st8l65_capfit_params.txt` still shows gds —
+  regenerate before quoting it.

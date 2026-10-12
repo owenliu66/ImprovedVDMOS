@@ -1,7 +1,8 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot date: 2026-10-11 (blocking problems 1–2 resolved); gate-overdrive-cap
-section appended after sessions 4–5. Companion to [README.md](README.md).*
+*Snapshot date: 2026-10-11 (blocking problems 1–2 resolved); sessions 4–5 cap
+section and session 7 gds-deletion section appended. Companion to
+[README.md](README.md).*
 
 ## What exists
 
@@ -22,11 +23,13 @@ Projects/ImprovedVDMOS/
 
 - **Model** — `vdmos_id()` evaluates the unified continuous drain current
   (softplus subthreshold, gate-overdrive charge cap kcap/m, mobility
-  degradation via Vk, velocity saturation, DIBL, gated CLM, drift conductance,
+  degradation via Vk, velocity saturation, DIBL, gated CLM,
   one-sided kink sigmoid), embedded with package series resistance rd/rs
   (implicit external-node solve with stall guard, LTspice Rd/Rs semantics;
-  Vds ≥ 0 only). `vdmos_id_level1()` is now the **correct** LTspice reference
-  with knee at `Vov/mtriode` and takes the same rd/rs embedding for fair A/B.
+  Vds ≥ 0 only). No drift-leakage term (gds deleted, session 7): the off
+  state is the gate-dependent softplus floor. `vdmos_id_level1()` is now
+  the **correct** LTspice reference with knee at `Vov/mtriode` and takes
+  the same rd/rs embedding for fair A/B.
 - **Extraction** — `fit()` runs bounded `least_squares` with positive
   parameters in log space; two-stage relative→ampere weighting is wired into
   `scripts/fit_datasheet.py`.
@@ -45,10 +48,11 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **86 tests passed, 1 skipped** (skip = digitizer test needing a Tk display;
-  verified run before the cap commit: 78 pre-cap + 7 `test_gate_cap.py` +
-  dead-column identifiability test + Newton two-cycle stall test).
-  `ruff check` clean.
+- **87 tests, all passing** (verified 2026-10-11 after the gds deletion;
+  `ruff check` clean). Caveat: 8 of the digitizer window tests drive Tk and
+  self-skip when the subprocess has no display — in headless runs 0–2 of them
+  skip (flaky per-process), so "N passed, M skipped" totals vary; the count
+  grew 86 → 87 with session 7's renamed off-state tests netting one new test.
 - All pre-package-R anchors unchanged (rd = rs = 0 fast path is bit-identical);
   all pre-cap anchors unchanged (kcap = 0 is the exact identity, pinned by
   `tests/test_gate_cap.py`):
@@ -93,8 +97,9 @@ Projects/ImprovedVDMOS/
 4. `vthk` is barely sensed (σ ≈ 477 %, sensitivity ~2000× below kp) because
    `kk = 0.1 V` saturates the kink sigmoid above Vgs = 2 V. Needs dense Vgs
    points through the kink, or fix it from measurement.
-5. `gds` σ ≈ 455 % — only the off-state constrains it, and the synthetic grid
-   has no off-state points.
+5. **`gds` σ ≈ 455 %. RESOLVED (session 7) — the term is deleted, not
+   re-measured.** See "gds leak term deleted" below; the off-state anchor it
+   faked is now carried physically by ksub/vth0.
 
 ### Missing
 
@@ -132,11 +137,15 @@ Projects/ImprovedVDMOS/
   datasheet Rds(on) is 2-terminal and already contains rd+rs.
 - **Measured properties (pinned by `tests/test_package_r.py`):**
   - Solver matches independent `brentq` roots to 3e-16 relative; grid
-    self-consistency residual < 1e-8.
+    self-consistency residual < 1e-8 relative, or < 1e-12 A absolute at the
+    subthreshold floor (solver atol; session 7 mixed rule).
   - Synthetic round trip (truth rd = 2 mΩ, rs = 1 mΩ): rd+rs recovered to
     0.3 %, individually −6.5 % / +14 %; identifiability reports
     **rd ↔ rs = −0.999** — only the sum is strongly pinned by static data.
-  - Off state: Id = gds·Vds/(1 + gds·(rd+rs)) exactly.
+  - Off state (session 7): Id at (Vds, Vgs) = (20, 0) is the gate-dependent
+    softplus channel floor (~1e-13 A), solved self-consistently through the
+    package R — the old exactness identity `Id = gds·Vds/(1 + gds·(rd+rs))`
+    died with the gds term (`test_off_state_solves_to_channel_floor`).
   - Terminal Ron = intrinsic + rd + rs to within ~70 µΩ (chord-resistance
     curvature at the shifted internal Vds accounts for the residual).
   - When truth rd = rs = 0, the free rd/rs columns are near-parallel →
@@ -239,4 +248,50 @@ above — re-measure after the next fit run.)
 
 Note: the root `STATUS.md` deletion (the move of this file to
 `src/vdmos_fit/`, committed as `d399939`) lands in the same cap commit.
+
+## gds leak term deleted — session 7
+
+**What.** The `+ gds·Vds` drift/substrate conductance term, the `gds` field,
+bound and free-set entry are deleted from model/params. The off state is now
+the gate-dependent softplus channel floor alone (~1e-13 A at Vgs = 0 with
+DEFAULT). `kappa` was already gone (session 5); this continues the
+"delete what the data cannot support" pass.
+
+**Why (measured, `out/nogds_probe.txt`).** On the ST8L65 data gds was a
+**one-point parameter**: 100 % of the (Vgs = Vds = 3.7 V, 250 µA) current and
+< 0.03 % of every other point. That point is the datasheet **Vgs(th) spec
+condition** — subthreshold *channel* current the softplus term already models
+with slope 1/ksub. The leak flattened the whole subthreshold transfer curve
+to a gate-independent 3.4 µA floor (slope ∞ mV/dec) and absorbed the
+threshold anchor. Reverse/HV leakage will come with the body diode / leakage
+element later, not a fitted resistor.
+
+**Probe refit (gds fixed at 0, before deletion; 4 multi-starts, one basin):**
+
+| | fit B baseline (gds free) | fit B, gds = 0 |
+|---|---|---|
+| RMSE_rel | 5.54 % | **5.54 %** (identical) |
+| off point (3.7, 3.7) | 250.0 µA via leak | **250.0 µA via channel** |
+| ksub | 0.0264, dead (σ = inf) | **0.1836, live, σ = 3.5** |
+| rank / cond | 10/10 / 2.2e9 | **9/9 / 3.75e4** |
+| plateau @19.7 V | 223.9 A (−6.8 %) | 223.9 A (unchanged) |
+
+Fit A (with the anomalous Vgs = 5 curve) loses the off point (RMSE 9.17 →
+9.97 %, ksub dead): the Vgs=5 curve's steep 5→6 V gate slope fights the
+250 µA anchor, and gds had been decoupling them. Per decision 6 fit B is the
+fair number; the honest fit-A fix is dropping the curve, not keeping the leak.
+
+**Caveat:** ksub = 0.184 V implies ~420 mV/dec swing — the single anchor
+point pins the *level*, not the *slope*. A near-threshold transfer curve
+(digitise if available) would pin the swing; do NOT hard-fix ksub to a
+physical value, that would shove the anchor into vth0 (corr +0.99).
+
+**Anchors:** DEFAULT reference numbers survive the deletion within test
+tolerances (Ron 4.271 mΩ, sat table 31.45/91.02/157.06/225.88/297.67 A,
+α = 1.078, Level-1 ratios 4.25/4.80/5.33) — the old gds = 1e-3 contributed
+≤ 0.02 A at Vds ≤ 20 V. The stall guard is unaffected (gate-degeneration
+cliff, not the leak: same set minus gds still lands in the Vds ≈ 178 V band).
+
+**Stale outputs:** `out/st8l65_capfit_params.txt` still lists gds — the
+official fits must be re-run with the 9-param free set (next session).
 

@@ -111,7 +111,6 @@ def example_dataset(noise: float = 0.01, seed: int = 1) -> CurveSet:
         vsat=1.2,
         eta=0.03,
         lam=0.015,
-        gds=2e-3,
         gk=0.3,
         vthk=1.5,
     )

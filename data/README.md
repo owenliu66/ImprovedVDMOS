@@ -35,7 +35,9 @@ Record the source (datasheet rev, figure number, temperature) in a sidecar
 2. **Rds(on) vs Vgs** spec table → the strongest constraint on Ron; fit with
    `--weight abs` on these points.
 3. **Output curves** Id(Vds) at several Vgs → fixes vsat, lam, eta.
-4. **Off-state / subthreshold** Id(Vds) at Vgs = 0 → fixes gds.
+4. **Off-state / subthreshold** Id(Vds) at Vgs = 0 → fixes the subthreshold
+   floor (ksub, vth0). (Used to say "fixes gds"; that leak term was deleted,
+   session 7.)
 5. **Kink region** (trench parts): dense Vgs spacing near the kink onset → gk, vthk, kk.
 
 Static data cannot identify capacitance or switching parameters — those come
@@ -56,7 +58,8 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   columns by header, so order/extras don't matter). Seven gate curves:
   Vgs = 3.7, 5, 6, 7, 8, 9, 10 V; Vds range 0–20 V.
 - **Spec anchors included:** the Vgs(th) point (Vgs = Vds = 3.7 V,
-  Id = 250 µA) — the only off-state point, anchors gds ≈ 68 µS — and the
+  Id = 250 µA) — the only off-state point, anchors ksub/vth0 through the
+  subthreshold channel (the gds leak term was deleted, session 7) — and the
   Rds(on) points at Vgs = 10 V (0.483 V/14 A, 1 V/29 A, 1.26 V/35 A →
   34.5–36 mΩ chord).
 - **Real-data oddity kept, not cleaned:** the Vgs = 5 curve has two points
@@ -65,7 +68,9 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   then β ≈ 0.12); `scripts/fit_st8l65.py` reports fits with and without that
   curve (fit A / fit B).
 - **Removed point:** (Vgs = 0, Vds = 650 V, Id = 1 µA) was digitised but
-  removed — the channel model has no HV leakage term, and one gds cannot give
-  both 1 µA at 650 V (1.5 nS) and 250 µA at 3.7 V (68 µS).
+  removed — the channel model has no high-voltage leakage element yet, and no
+  single conductance could give both 1 µA at 650 V (1.5 nS) and 250 µA at
+  3.7 V (68 µS) anyway. Real HV leakage waits for the body diode / a
+  dedicated leakage element.
 - **No Rds(on)-vs-Vgs curve exists in this datasheet** (checked); the
   rd/rs-vs-channel split stays weakly identified without it.
