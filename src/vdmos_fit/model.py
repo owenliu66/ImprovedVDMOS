@@ -1,18 +1,19 @@
 """Improved VDMOS channel current: one continuous expression, no triode/sat switch.
 
-    I_D = kp*Vov*(v - v^2/(2*Vk)) / (1 + v/vsat) * (1 + lam*Vds*tanh(Vds/Vk))
+    I_D = kp*Vov_eff*(v - v^2/(2*Vk)) / (1 + v/vsat) * (1 + lam*Vds*tanh(Vds/Vk))
           + gds*Vds
           + gk*Vds*tanh((Vgs - Vth_k)/kk)*tanh(Vds/Vk)
 
-    Vth  = Vth0 - eta*Vds*tanh(Vds/Vk)          DIBL (bounded)
-    Vov  = ksub*ln(1 + exp((Vgs - Vth)/ksub))   smooth subthreshold -> strong inversion
-    Vk   = Vov/(1 + theta*Vov)                  knee voltage (field-dependent mobility)
-    v    = Vk*tanh(Vds/Vk)                      soft drain variable (replaces the knee switch)
+    Vth     = Vth0 - eta*Vds*tanh(Vds/Vk)          DIBL (bounded)
+    Vov     = ksub*ln(1 + exp((Vgs - Vth)/ksub))   smooth subthreshold -> strong inversion
+    Vov_eff = Vov/(1 + (Vov/kcap)**m)**(1/m)       soft charge cap (kcap = 0 -> off)
+    Vk      = Vov_eff/(1 + theta*Vov_eff)          knee voltage (field-dependent mobility)
+    v       = Vk*tanh(Vds/Vk)                      soft drain variable (replaces the knee switch)
 
 Limits
 ------
-Vds << Vk :  I_D -> kp*Vov*Vds*(1 + ...)                     ohmic, m_triode = 1
-Vds >> Vk :  I_D -> 0.5*kp*Vov^2*(0.5+th*Vov)/(1+th*Vov)^2 / (1+Vk/vsat)   saturated
+Vds << Vk :  I_D -> kp*Vov_eff*Vds*(1 + ...)                   ohmic, m_triode = 1
+Vds >> Vk :  I_D -> 0.5*kp*Vov_eff^2*(0.5+th*Vov_eff)/(1+th*Vov_eff)^2 / (1+Vk/vsat)
 
 With theta = vsat = eta = gds = gk = 0 the model becomes a *smooth approximation*
 of the Level-1 equations with m_triode = 1: exact in the ohmic limit (Vds/Vov -> 0)
@@ -33,22 +34,34 @@ parameters, so `vdmos_id_level1()` gets the identical treatment for fair A/B.
 rs additionally *degenerates* the gate (gm_eff = gm/(1 + rs*gm)); it is not a
 pure series drop.
 
-Drain resistance that grows with drain bias (kappa)
----------------------------------------------------
-`rd` alone cannot describe a super-junction / long-drift device: measured there
-(Vgs 8-10 V, Vds ~ 19 V) the gate exponent collapses to alpha ~ 0.1 and the
-output curves go nearly flat and gate-independent, which no setting of
-theta/vsat/lam can produce. Setting `kappa` > 0 makes the drain-side series
-resistance grow with the voltage *it* supports:
+Gate-overdrive cap (kcap, m) -- finite charge in the SJ pillars
+--------------------------------------------------------------
+On a super-junction part the measured gate exponent alpha = d ln Id / d ln Vov is
+strongly bimodal: ~1.6-1.8 at low overdrive, collapsing to ~0.1 above Vgs ~ 8 V
+(ST8L65N044M9, 25 C pulsed: 1.68 / 1.61 / 1.00 / 0.16 / 0.07 across Vgs
+5->6->7->8->9->10 at the top of each curve). The lightly doped N pillars under
+the trench hold only a finite amount of free charge, so once the surface channel
+is strongly enhanced the mobile charge in the current path stops growing with the
+gate -- as if two channels in series had one of them saturate. No setting of
+theta/vsat/lam can make alpha drop by an order of magnitude.
 
-    u     = voltage across the drain-side resistance
-    R_d(u)= rd*(1 + kappa*u)   ->  u = Id*rd / (1 - Id*rd*kappa)   (closed form)
-    Vds'  = Vds - u - rs*Id     Vgs' = Vgs - rs*Id
+The previous fix for this was `kappa`, a drain-bias-dependent series resistance.
+It is removed: it is a *voltage divider*, not a charge limit, and the fit made
+that obvious -- rd had to grow to ~25 mOhm and then carried 75 % of the terminal
+voltage already at the ohmic Ron anchor (Vds = 0.483 V, Id = 14 A), i.e. kappa
+was acting as an implicit pseudo-cap while pretending to be a package resistance.
+The cap is the honest mechanism:
 
-With the channel strongly enhanced the terminal characteristic becomes
-Id -> Vds/(rd*(1 + kappa*Vds)), i.e. it flattens toward the finite drift-limited
-plateau Id_max = 1/(rd*kappa) -- the RESURF/JFET-depletion behaviour. `kappa = 0`
-(the default) reproduces the plain rd/rs embedding exactly.
+    Vov_eff = Vov / (1 + (Vov/kcap)**m)**(1/m)
+
+Identity for Vov << kcap (subthreshold and the Ron limit untouched), asymptote
+kcap for Vov >> kcap, and 0 <= dVov_eff/dVov <= 1 everywhere -- which is what
+keeps the package-R solver's bracket invariant dg/dId <= -1 intact. m sets the
+sharpness; the measured collapse is abrupt, so m ~ 10 rather than the m = 1 of a
+tanh. The cap is applied BEFORE Vk (variant A) so charge and knee saturate
+together: with a depleted pillar the pinch-off voltage is set by the depleted
+column, not by the surface charge. `kcap = 0` (default) is the exact identity and
+leaves every pre-cap anchor bit-identical.
 
 The implicit equation is solved with bracketed safeguarded Newton, NOT fixed-point
 iteration: in the ohmic region the fixed-point contraction factor is
@@ -91,7 +104,7 @@ def vdmos_id(vds, vgs, p: Params = DEFAULT) -> np.ndarray:
     if p.rd == 0.0 and p.rs == 0.0:
         return _channel_current(vds, vgs, p)
     return _solve_package_r(
-        vds, vgs, p.rd, p.rs, lambda d, g: _channel_current(d, g, p), kappa=p.kappa
+        vds, vgs, p.rd, p.rs, lambda d, g: _channel_current(d, g, p)
     )
 
 
@@ -107,7 +120,13 @@ def _channel_current(vds, vgs, p: Params) -> np.ndarray:
     z = np.clip((vgs - vth) / p.ksub, -700.0, 700.0)
     vov = p.ksub * np.log1p(np.exp(z))
 
-    # 3) Knee voltage from vertical-field mobility degradation.
+    # 2b) Soft charge cap: finite mobile charge in the super-junction pillars.
+    # kcap = 0 is the identity, so the pre-cap model is reproduced bit for bit.
+    vov = _soft_cap(vov, p.kcap, p.m)
+
+    # 3) Knee voltage from vertical-field mobility degradation. Built from the
+    # CAPPED overdrive (variant A): with a depleted pillar the pinch-off voltage
+    # is set by the depleted column, not by the surface charge.
     vknee = np.maximum(vov / (1.0 + p.theta * vov), p.vov_floor)
 
     # 4) Soft drain variable: v -> Vds for Vds << Vk, v -> Vk for Vds >> Vk.
@@ -134,6 +153,24 @@ def _channel_current(vds, vgs, p: Params) -> np.ndarray:
     return ich + idrift + ikink
 
 
+def _soft_cap(vov, kcap: float, m: float):
+    """Soft power-law cap vov/(1 + (vov/kcap)**m)**(1/m), evaluated in log space.
+
+    Identity for vov << kcap, asymptote kcap for vov >> kcap, and
+    0 <= dVov_eff/dVov <= 1 everywhere (the derivative is (1+u**m)**(-1/m-1)
+    with u = vov/kcap). That bound is what keeps the package-R Newton bracket
+    valid: the channel's dI/dVds can only shrink, never blow up. The log-space
+    form avoids overflowing (vov/kcap)**m, since m ~ 10-40 is a fitted regime,
+    not a hypothetical one. kcap <= 0 returns vov unchanged -- the exact pre-cap
+    model, bit for bit.
+    """
+    if kcap <= 0.0:
+        return vov
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = m * (np.log(np.maximum(vov, 1e-300)) - np.log(kcap))
+    return vov * np.exp(-np.logaddexp(0.0, t) / m)
+
+
 def _solve_package_r(
     vds: np.ndarray,
     vgs: np.ndarray,
@@ -141,33 +178,22 @@ def _solve_package_r(
     rs: float,
     f,
     *,
-    kappa: float = 0.0,
     atol: float = 1e-12,
     rtol: float = 1e-10,
     max_iter: int = 60,
 ) -> np.ndarray:
-    """Solve Id = f(Vds - R_d*Id - rs*Id, Vgs - rs*Id) for the terminal currents.
+    """Solve Id = f(Vds - (rd + rs)*Id, Vgs - rs*Id) for the terminal currents.
 
-    R_d = rd for kappa = 0 (plain package resistance), else rd*(1 + kappa*u) with
-    u the voltage the drain-side resistance supports, giving the closed form
-    u = Id*rd/(1 - Id*rd*kappa). kappa = 0 takes the original code path, so
-    existing results are bit-identical.
-
-    Bracket: Id in [0, Id_hi]. Two independent upper bounds, take the min:
-      (a) Id <= Vds/(rd+rs), because R_d >= rd so the terminal resistance is
-          never below rd + rs.
-      (b) With kappa > 0 the channel must support a non-negative internal Vds,
-          so u = Id*rd/(1 - Id*rd*kappa) <= Vds, which rearranges to
-          Id <= Vds/(rd*(1 + kappa*Vds)). This is much tighter than (a) at high
-          Vds and, crucially, stays far below the u(Id) pole at 1/(rd*kappa).
-          Without (b), Newton can sit near the pole where du/dId diverges, the
-          Newton step becomes vanishingly small, and the solve stalls.
+    Bracket: Id in [0, Vds/(rd+rs)]. Bound: Id <= Vds/(rd+rs), because the
+    terminal resistance is never below rd + rs.
     g(Id) = f(.) - Id changes sign across the bracket: f has the sign of the
     internal Vds and f(0, .) = 0 exactly (every model term is gated by Vds or
     tanh(Vds/Vk)), which also makes clamping the internal Vds at 0 harmless when
-    a trial point overshoots. dg/dId <= -1 keeps Newton well-conditioned;
-    bisection is the fallback whenever a Newton step leaves the bracket or makes
-    no progress. Fixed-point iteration is NOT used -- see module docstring.
+    a trial point overshoots. dg/dId <= -1 keeps Newton well-conditioned; the
+    gate-overdrive cap preserves this because 0 <= dVov_eff/dVov <= 1 can only
+    shrink the channel's dI/dVds. Bisection is the fallback whenever a Newton
+    step leaves the bracket or makes no progress. Fixed-point iteration is NOT
+    used -- see module docstring.
 
     Raises RuntimeError if any grid point fails to converge; never silently
     returns an unconverged current.
@@ -179,8 +205,6 @@ def _solve_package_r(
     """
     if rd < 0.0 or rs < 0.0:
         raise ValueError(f"rd and rs must be >= 0 (got rd={rd}, rs={rs})")
-    if kappa < 0.0:
-        raise ValueError(f"kappa must be >= 0 (got {kappa})")
     if np.any(vds < 0.0):
         raise ValueError(
             "package-R embedding requires Vds >= 0: the channel-only model is "
@@ -192,26 +216,28 @@ def _solve_package_r(
 
     lo = np.zeros_like(vds)
     hi = vds / rtot
-    if kappa > 0.0 and rd > 0.0:
-        # Bound (b): keeps the iterate well below the u(Id) pole.
-        hi = np.minimum(hi, vds / (rd * (1.0 + kappa * vds)))
     idc = 0.5 * (lo + hi)
+    stall = np.zeros(vds.shape, dtype=int)
+    prev_width = None
 
     g = None
     for _ in range(max_iter):
-        if kappa == 0.0:
-            vd_i = vds - rtot * idc
-        else:
-            u = idc * rd / (1.0 - idc * rd * kappa)
-            # A trial point may overshoot; the channel is then fully shorted and
-            # f(0, .) = 0 exactly, which drives the bracket back down.
-            vd_i = np.maximum(vds - u - rs * idc, 0.0)
+        vd_i = vds - rtot * idc
         vg_i = vgs - rs * idc
         g = f(vd_i, vg_i) - idc
 
         # g > 0 -> root above idc; g < 0 -> root below (g is strictly decreasing).
         lo = np.where(g > 0.0, idc, lo)
         hi = np.where(g < 0.0, idc, hi)
+
+        # Stall detector: a Newton two-cycle (e.g. gate-degeneration cliffs from
+        # rs*Id near the cap knee) can keep both endpoints inside the bracket and
+        # shrink it only by ~1e-5 per iteration. Force bisection until the bracket
+        # halves again.
+        width = hi - lo
+        if prev_width is not None:
+            stall = np.where(width > 0.9 * prev_width, stall + 1, 0)
+        prev_width = width
 
         done = np.abs(g) <= atol + rtol * np.abs(idc)
         if done.all():
@@ -222,22 +248,15 @@ def _solve_package_r(
         hg = 1e-6 * np.maximum(1.0, np.abs(vg_i))
         fd = (f(vd_i + hd, vg_i) - f(vd_i - hd, vg_i)) / (2.0 * hd)
         fg = (f(vd_i, vg_i + hg) - f(vd_i, vg_i - hg)) / (2.0 * hg)
-        if kappa == 0.0:
-            # Exactly the original expression -- keeps kappa=0 bit-identical.
-            dg = -rtot * fd - rs * fg - 1.0  # <= -1 always
-        else:
-            # d(Vds_internal)/dId = -(du/dId + rs); du/dId = rd/(1-Id*rd*kappa)^2
-            dudI = rd / (1.0 - idc * rd * kappa) ** 2  # >= rd
-            dg = -((dudI + rs) * fd + rs * fg) - 1.0  # <= -1 always
+        dg = -rtot * fd - rs * fg - 1.0  # <= -1 always
 
         cand = idc - g / dg
-        # Accept Newton only if it stays inside the bracket AND actually makes
-        # progress; otherwise bisect. The progress test matters when kappa > 0:
-        # near the u(Id) pole dg diverges, so a Newton step can be in-bracket
-        # yet arbitrarily small and the iteration would stall.
+        # Accept Newton only if it stays inside the bracket, actually makes
+        # progress, and the bracket has not stalled (guards a zero-step Newton
+        # and the two-cycle above).
         inside = (cand > lo) & (cand < hi)
         moved = np.abs(cand - idc) > 1e-12 * (hi - lo)
-        cand = np.where(inside & moved, cand, 0.5 * (lo + hi))
+        cand = np.where(inside & moved & (stall < 3), cand, 0.5 * (lo + hi))
         idc = np.where(done, idc, cand)
 
     raise RuntimeError(

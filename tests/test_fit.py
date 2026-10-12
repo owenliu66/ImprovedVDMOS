@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -134,6 +136,45 @@ def test_theta_vsat_correlation_is_reported(synthetic):
     assert ("theta", "vsat") in pairs
     # and both carry large individual error bars as a consequence
     assert ident.sigma_rel["theta"] > 1.0
+
+
+def test_dead_parameter_reports_inf_not_a_small_sigma():
+    """A parameter with (near-)zero sensitivity must report sigma_rel = inf.
+
+    This is the trap `identifiability()` exists to avoid: a bare
+    pinv(J.T @ J) returns *zero* variance for a near-zero Jacobian column,
+    which reads as "perfectly determined" when the truth is the exact
+    opposite. Reproduced synthetically on the ST8L65 situation: a dataset
+    whose lowest Vgs is 8 V (vth0 = 3.1) contains no subthreshold points, so
+    ksub carries essentially no information -- its column measures 1.9e-9 of
+    the largest column, and pinning ksub at 0.30 V leaves the fit at the same
+    optimum. The old absolute 1e-10 * max tolerance classified that column
+    LIVE and reported a confident small sigma; the relative 1e-5 tolerance
+    classifies it dead. gds (1.5e-3, genuinely sensed but weak) stays live
+    with 15x margin, so the tolerance does not over-trigger.
+    """
+    truth = Params(kp=30.0, vth0=3.1, ksub=0.05, theta=0.02, vsat=1.2,
+                   eta=0.03, lam=0.015, gds=2e-3, gk=0.0)
+    vgs = np.linspace(8.0, 14.0, 25)
+    vds = np.array([0.5, 2.0, 5.0, 10.0, 20.0])
+    data = make_synthetic(truth, vgs, vds, noise=0.0, seed=0)
+    free = ("kp", "vth0", "ksub", "theta", "vsat", "eta", "lam", "gds")
+
+    ident = identifiability(fit(data, start=truth, free=free), free)
+    assert math.isinf(ident.sigma_rel["ksub"])
+    assert ident.unidentifiable == ("ksub",)
+    # rank drops by at least the dead column; eta <-> gds are also near-
+    # degenerate on this grid (corr -0.975), so rank is not pinned exactly.
+    assert ident.rank <= len(free) - 1
+    # the near-dead column must not fake a correlation with a real parameter
+    assert not any("ksub" in (a, b) for a, b, _ in ident.worst_pairs)
+    # genuinely sensed, merely weak -> must NOT be called dead
+    assert not math.isinf(ident.sigma_rel["gds"])
+
+    # Independent confirmation: pinning the dead parameter cannot change the fit.
+    pinned = fit(data, start=truth.replace(ksub=0.30),
+                 free=tuple(n for n in free if n != "ksub"))
+    assert pinned.params.kp == pytest.approx(30.0, rel=1e-3)
 
 
 def test_curveset_validation():

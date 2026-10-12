@@ -1,8 +1,30 @@
 """Fit the ST8L65N044M9 (650 V, 36-44 mOhm super-junction FET) static data.
 
-Compares the plain rd/rs embedding (kappa = 0) against the drain-bias-dependent
-drain resistance (kappa > 0, super-junction JFET/RESURF effect), and reports
-identifiability + per-curve residuals.
+Gate-overdrive charge cap (kcap, m) fit -- the mechanism that replaced the
+removed `kappa` (drain-bias-dependent series resistance; see HANDOVER.md
+section 5 and the model docstring). The cap keeps rd a plain resistor and
+reproduces the bimodal gate exponent alpha (1.7 -> 0.07 across Vgs 5 -> 10).
+
+Free set and per-device bounds follow HANDOVER section 4:
+  free  = kp, vth0, ksub, lam, gds, rd, rs, vk, kcap, m
+  fixed = theta = 0, vsat = 1e4 (off), eta = 0, gk = 0, vthk = 1.6,
+          kk = 0.1, vov_floor = 1e-3   (all measured dead on this data,
+          section 3e -- the cap subsumes theta/vsat, and 0-20 V data has
+          no DIBL or kink evidence)
+  bounds: rd, rs <= 36 mOhm (datasheet Rds(on)); lam <= 0.004 1/V
+          (0.038 is absurd CLM for a 650 V part; the dataset stops at
+          Vds = 20 V and never enters deep saturation)
+
+Two fits are run (HANDOVER section 2, decision 5): the full 41-point set,
+and one WITHOUT the Vgs = 5 curve. That curve is physically unreproducible
+by any C1 model (Id = 3.937 A at BOTH Vds = 1.127 and 5.153 requires
+beta = 0 over a 4.6x voltage interval, then beta = 0.118; section 3f) and
+dominates the overall RMSE. The comparison shows how much of the reported
+error is that curve rather than model inadequacy.
+
+Watch vk: with lam capped, the output slope must come from gds/vk, and the
+session-4 fit picked vk = 0.65 V (sigma_rel = 148, barely sensed) producing
+a knee narrower than the datasheet figure shows (section 7 item 1).
 
     python scripts/fit_st8l65.py
 
@@ -36,95 +58,72 @@ OUT = ROOT / "out"
 # low-VT device and must never be used as a start for a different one.
 GDS_OFF = 250e-6 / 3.7  # from the single remaining off-state point
 START = Params(
-    kp=40.0, vth0=4.7, ksub=0.06, theta=0.10, vsat=100.0, eta=0.01,
-    lam=1e-6, gds=GDS_OFF, gk=0.0, vthk=1.6, kk=0.1, vk=10.0,
-    rd=0.034, rs=0.005, kappa=0.0,
-)
-BASE_FREE = ("kp", "vth0", "ksub", "theta", "eta", "gds", "rd", "rs")
-DRIFT_FREE = BASE_FREE + ("kappa",)
-# Everything the model has, except vov_floor (a numerical floor, never fitted).
-ALL_FREE = (
-    "kp", "vth0", "ksub", "theta", "vsat", "eta", "lam", "gds", "gk",
-    "vthk", "kk", "vk", "rd", "rs", "kappa",
+    kp=40.0, vth0=4.7, ksub=0.06, kcap=2.0, m=10.0,
+    theta=0.0, vsat=1e4, eta=0.0, lam=1e-3, gds=GDS_OFF,
+    gk=0.0, vthk=1.6, kk=0.1, vk=10.0, rd=0.030, rs=0.005,
 )
 
-# Wider search box for the unconstrained run: the physical defaults in BOUNDS
-# are what pinned ksub/theta/vsat/lam in the constrained fits, so a "no
-# constraints" fit must widen them or it just reproduces the same corners.
-WIDE_BOUNDS = {
-    "kp": (1e-3, 1e5),
-    "vth0": (-2.0, 12.0),
-    "ksub": (1e-4, 1.0),
-    "theta": (1e-8, 20.0),
-    "vsat": (1e-3, 1e4),
-    "eta": (1e-8, 1.0),
-    "lam": (1e-10, 20.0),
-    "gds": (1e-14, 10.0),
-    "gk": (1e-15, 1e3),
-    "vthk": (-20.0, 20.0),
-    "kk": (1e-4, 20.0),
-    "vk": (1e-3, 1e4),
-    "rd": (0.0, 0.5),
-    "rs": (0.0, 0.5),
-    "kappa": (0.0, 20.0),
+# HANDOVER section 4 free set. kcap/m are freed explicitly here (they are NOT
+# in DEFAULT_FREE: the cap is off for the low-VT anchor device).
+FREE = ("kp", "vth0", "ksub", "lam", "gds", "rd", "rs", "vk", "kcap", "m")
+
+# Per-device bounds: rd/rs each capped at the datasheet Rds(on) = 36 mOhm
+# (global BOUNDS stay at 0.5 Ohm), lam capped at 0.004 1/V -- the
+# unconstrained fit wanted 0.038, which is absurd CLM for a 650 V part.
+DEVICE_BOUNDS = {
+    "rd": (0.0, 0.036),
+    "rs": (0.0, 0.036),
+    "lam": (1e-6, 0.004),
 }
 
-# vsat / lam are pinned at "off" (100 V / 1e-6 1/V): the drift resistance, not
-# channel velocity saturation or CLM, sets the output characteristic here.
+# Multi-start around the session-4 basin (kp~92, kcap~1.9, m~10, vk~0.65)
+# plus deliberately different basins for vk/kcap/m, since vk is barely
+# sensed (sigma_rel = 148) and one bad vk/kcap start stalled at 14 % RMSE.
 MULTI_START = [
-    dict(kp=40.0, theta=0.10, rd=0.034, rs=0.005, vth0=4.70, ksub=0.06, eta=0.01, kappa=0.07),
-    dict(kp=100.0, theta=0.50, rd=0.030, rs=0.010, vth0=4.60, ksub=0.12, eta=0.03, kappa=0.10),
-    dict(kp=20.0, theta=0.05, rd=0.036, rs=0.002, vth0=4.86, ksub=0.03, eta=0.005, kappa=0.03),
-    dict(kp=300.0, theta=1.50, rd=0.025, rs=0.015, vth0=4.50, ksub=0.20, eta=0.02, kappa=0.15),
-    dict(kp=60.0, theta=0.20, rd=0.034, rs=0.005, vth0=4.75, ksub=0.08, eta=0.001, kappa=0.30),
-]
-# Extra starts that explore the parts of the box the constrained fits could not
-# reach (large vsat/lam, active kink, small vk) -- used only by the free fit.
-EXTRA_START = [
-    dict(kp=500.0, theta=0.02, vsat=3.0, lam=0.5, rd=0.020, rs=0.010, vth0=4.40,
-         ksub=0.10, eta=0.05, kappa=0.05, gk=0.5, vthk=4.0, kk=0.3, vk=2.0),
-    dict(kp=15.0, theta=5.0, vsat=1e3, lam=1e-4, rd=0.040, rs=0.001, vth0=5.00,
-         ksub=0.01, eta=1e-4, kappa=1.0, gk=1e-6, vthk=0.5, kk=0.02, vk=50.0),
-    dict(kp=1e3, theta=0.5, vsat=10.0, lam=0.05, rd=0.010, rs=0.030, vth0=4.20,
-         ksub=0.30, eta=0.20, kappa=0.01, gk=5.0, vthk=6.0, kk=1.0, vk=0.5),
+    dict(kp=90.0, vth0=4.73, ksub=0.06, lam=1e-3, kcap=1.9, m=10.0,
+         vk=0.7, rd=0.026, rs=0.005),
+    dict(kp=40.0, vth0=4.70, ksub=0.06, lam=1e-3, kcap=2.5, m=5.0,
+         vk=2.0, rd=0.020, rs=0.010),
+    dict(kp=150.0, vth0=4.60, ksub=0.10, lam=3e-3, kcap=1.2, m=20.0,
+         vk=1.0, rd=0.030, rs=0.002),
+    dict(kp=60.0, vth0=4.86, ksub=0.03, lam=1e-4, kcap=3.0, m=8.0,
+         vk=5.0, rd=0.015, rs=0.015),
 ]
 
 
-def multi_fit(data: CurveSet, free: tuple[str, ...], *, wide: bool = False) -> FitResult:
+def multi_fit(data: CurveSet) -> FitResult:
     """Best-of-multi-start; all starts are reported so basin-hopping is visible."""
     best = None
-    starts = MULTI_START + (EXTRA_START if wide else [])
-    for s in starts:
-        st = START.replace(**{k: v for k, v in s.items() if k != "kappa"})
-        if "kappa" in free:
-            st = st.replace(kappa=s["kappa"])
-        res = fit(data, start=st, free=free, weight="relative", max_nfev=8000,
-                  bounds_overrides=WIDE_BOUNDS if wide else None)
-        print(f"    start kp={s['kp']:8.4g} theta={s['theta']:7.4g} kappa={s['kappa']:6.4g}"
-              f" vth0={s['vth0']:5.2f} -> RMSE {res.rmse_rel * 100:6.2f} %"
+    for s in MULTI_START:
+        st = START.replace(**s)
+        res = fit(data, start=st, free=FREE, weight="relative", max_nfev=8000,
+                  bounds_overrides=DEVICE_BOUNDS)
+        print(f"    start kp={s['kp']:8.4g} kcap={s['kcap']:6.4g} m={s['m']:6.4g}"
+              f" vk={s['vk']:6.4g} rd={s['rd'] * 1e3:5.2f}m"
+              f" -> RMSE {res.rmse_rel * 100:6.2f} %"
               + ("" if res.success else "   [stopped]"))
         if best is None or res.rmse_rel < best.rmse_rel:
             best = res
     return best
 
 
-def report(res: FitResult, data, free: tuple[str, ...], label: str) -> None:
+def report(res: FitResult, data, label: str) -> None:
     p = res.params
     state = "converged" if res.success else "STOPPED"
     print(f"\n=== {label}: RMSE_rel = {res.rmse_rel * 100:.2f} % "
           f"({res.n_points} pts, {res.n_free} free, {state}) ===")
-    for name in free:
+    for name in FREE:
         print(f"   {name:<8s} = {getattr(p, name):.6g}")
-    print(f"   rd+rs = {(p.rd + p.rs) * 1e3:.2f} mOhm")
-    if p.kappa > 0:
-        print(f"   drift plateau Id_max = 1/(rd*kappa) = {1.0 / (p.rd * p.kappa):.1f} A"
-              f"   (R_d at 19.7 V = {p.rd * (1 + p.kappa * 19.7) * 1e3:.1f} mOhm)")
+    print(f"   rd+rs = {(p.rd + p.rs) * 1e3:.2f} mOhm"
+          f"   (measured Ron chord at Vgs=10: 34.5 mOhm)")
+    plateau = float(vdmos_id(19.7, 10.0, p))
+    print(f"   plateau Vgs=10 @ 19.7 V: {plateau:.1f} A   (measured 240.2 A)")
     pinned = res.on_bounds()
     if pinned:
         print("   PINNED AT BOUND (not a physical result):")
         for name, which in pinned.items():
             print(f"     {name:<8s} {which}")
-    ident = identifiability(res, free)
+    ident = identifiability(res, FREE)
     print("   " + ident.summary().replace("\n", "\n   "))
 
     model = vdmos_id(data.vds, data.vgs, p)
@@ -169,44 +168,42 @@ def main() -> None:
     data = load_csv(CSV)
     print(f"{data.label}: {len(data)} points, Vgs grid {data.vgs_grid()}")
     print(f"gds anchored from off point (3.7 V, 250 uA) = {GDS_OFF * 1e6:.2f} uS")
+    print(f"free = {FREE}")
+    print(f"device bounds overrides = {DEVICE_BOUNDS}")
 
-    print("\n--- control: kappa = 0 (plain rd/rs embedding) ---")
-    res0 = multi_fit(data, BASE_FREE)
-    report(res0, data, BASE_FREE, "kappa = 0")
+    print("\n--- fit A: full dataset (cap variant A, lam <= 0.004, rd/rs <= 36 mOhm) ---")
+    res_a = multi_fit(data)
+    report(res_a, data, "cap A, full data")
 
-    print("\n--- drift: kappa free (SJ JFET/RESURF drain resistance) ---")
-    res1 = multi_fit(data, DRIFT_FREE)
-    report(res1, data, DRIFT_FREE, "kappa free")
+    print("\n--- fit B: WITHOUT the Vgs = 5 curve (section 3f: no C1 model fits it) ---")
+    data_b = data.subset(~np.isclose(data.vgs, 5.0))
+    res_b = multi_fit(data_b)
+    report(res_b, data_b, "cap A, no Vgs=5")
 
-    print("\n--- FREE: all 15 parameters, widened bounds (no hand-pinning) ---")
-    res2 = multi_fit(data, ALL_FREE, wide=True)
-    report(res2, data, ALL_FREE, "fully free")
-
-    p0, p1, p2 = res0.params, res1.params, res2.params
-    def group_rmse(p, mask):
-        rel = (vdmos_id(data.vds, data.vgs, p) - data.ids) / data.ids
+    def group_rmse(p, d, mask):
+        rel = (vdmos_id(d.vds, d.vgs, p) - d.ids) / d.ids
         return float(np.sqrt(np.mean(rel[mask] ** 2)) * 100)
-    print(f"\nimprovement: kappa=0 {res0.rmse_rel * 100:.2f} %"
-          f" -> kappa free {res1.rmse_rel * 100:.2f} %"
-          f" -> fully free {res2.rmse_rel * 100:.2f} %")
-    print(f"Vgs>=6 only: kappa=0 {group_rmse(p0, data.vgs >= 6):.2f} %"
-          f" -> kappa free {group_rmse(p1, data.vgs >= 6):.2f} %"
-          f" -> fully free {group_rmse(p2, data.vgs >= 6):.2f} %")
+
+    print(f"\nVgs>=6 only: full-data fit {group_rmse(res_a.params, data, data.vgs >= 6):.2f} %"
+          f" | no-Vgs5 fit {group_rmse(res_b.params, data, data.vgs >= 6):.2f} %")
+    print("watch vk: with lam capped the output slope must come from gds/vk; a small vk"
+          " with large sigma_rel means the knee shape is not pinned by this data"
+          " (HANDOVER section 7 item 1).")
 
     OUT.mkdir(exist_ok=True)
-    plot(data, {"k=0": p0, "k>0": p1, "free": p2}, OUT / "st8l65_driftfit.png")
-    txt = OUT / "st8l65_fitted_params.txt"
-    head = res2.summary()
+    plot(data, {"full": res_a.params, "no_vgs5": res_b.params},
+         OUT / "st8l65_capfit.png")
+    txt = OUT / "st8l65_capfit_params.txt"
+    head = (res_a.summary()
+            + "\n\n--- without Vgs = 5 curve ---\n" + res_b.summary())
     tail = (
-        f"\n\nRMSE_rel: kappa=0 {res0.rmse_rel * 100:.2f} %"
-        f" | kappa free {res1.rmse_rel * 100:.2f} %"
-        f" | fully free {res2.rmse_rel * 100:.2f} %"
+        f"\n\nRMSE_rel: full {res_a.rmse_rel * 100:.2f} %"
+        f" | no-Vgs5 {res_b.rmse_rel * 100:.2f} %"
         "\nrd+rs is expected to sit BELOW the measured Rds(on) chord (34.5 mOhm):"
-        " Rds(on) = rd + rs + intrinsic channel resistance, and rd/rs are the"
-        " package (wirebonds, pins) only."
-        "\nCAVEAT: kappa multiplies rd, which is defined as package-only; the"
-        " element that physically depletes is the drift region. A separate"
-        " rdrift(kappa) element would be cleaner -- see STATUS.md."
+        " Rds(on) = rd + rs + intrinsic channel resistance. Only the SUM is"
+        " identifiable (rd <-> rs ~ -0.999); do not quote the split as physical."
+        "\nksub is free but carries no information on this dataset (one off-state"
+        " point only) -- expect it to drift to a bound with sigma_rel = inf."
     )
     txt.write_text(head + tail)
     print(f"wrote {txt}")

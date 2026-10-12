@@ -51,18 +51,20 @@ never change Id,sat = ½·Kp·Vov². Consequences:
 | Subthreshold | none (Id = 0 below Vto) | smooth softplus, slope → 1/ksub |
 | Off-state slope | undefined | gds·Vds |
 | Trench kink | none | one-sided sigmoid |
+| Gate-charge saturation (α collapse at high Vgs) | none | soft cap `kcap`, `m` (off by default) |
 
 ## Model
 
 ```
-I_D = kp·Vov·(v − v²/(2Vk)) / (1 + v/vsat) · (1 + λ·Vds·tanh(Vds/Vk))
+I_D = kp·Vov_eff·(v − v²/(2Vk)) / (1 + v/vsat) · (1 + λ·Vds·tanh(Vds/Vk))
       + gds·Vds
       + gk·Vds·tanh((Vgs − Vth_k)/kk)·tanh(Vds/Vk)
 
-Vth = Vth0 − η·Vds·tanh(Vds/Vk)              DIBL, bounded
-Vov = ksub·ln(1 + exp((Vgs − Vth)/ksub))     smooth subthreshold → strong inversion
-Vk  = Vov/(1 + θ·Vov)                        vertical-field mobility degradation
-v   = Vk·tanh(Vds/Vk)                        soft drain variable (replaces the knee switch)
+Vth     = Vth0 − η·Vds·tanh(Vds/Vk)              DIBL, bounded
+Vov     = ksub·ln(1 + exp((Vgs − Vth)/ksub))     smooth subthreshold → strong inversion
+Vov_eff = Vov/(1 + (Vov/kcap)^m)^(1/m)           soft gate-charge cap (kcap = 0 → off)
+Vk      = Vov_eff/(1 + θ·Vov_eff)                vertical-field mobility degradation
+v       = Vk·tanh(Vds/Vk)                        soft drain variable (replaces the knee switch)
 ```
 
 Setting `θ = vsat = η = gds = gk = 0` makes the model a smooth approximation of
@@ -70,6 +72,37 @@ the Level-1 equations with `m_triode = 1`: the soft drain variable rounds the
 hard corner, so it is exact in the ohmic limit and in deep saturation but up to
 ~6 % low around the knee. Quantified by
 `tests/test_model.py::test_level1_limit_agreement`.
+
+### Gate-overdrive charge cap (kcap, m)
+
+On a super-junction part the measured gate exponent α = d ln Id/d ln Vov is
+**bimodal**: ~1.6–1.8 at low overdrive, collapsing to ~0.1 above Vgs ≈ 8 V
+(ST8L65N044M9, 25 °C pulsed: 1.68 / 1.61 / 1.00 / 0.16 / 0.07 across
+Vgs 5→6→7→8→9→10 at the top of each curve). No setting of θ/vsat/λ can drop α
+by an order of magnitude. The physical picture: the lightly doped N pillars
+that carry the drain current hold only a **finite amount of free charge** —
+once the surface channel is strongly enhanced, driving the gate harder cannot
+add much more mobile charge in the pillar, so the *effective* overdrive
+saturates even though Vgs keeps rising, as if one of two series channels hit
+its ceiling.
+
+The cap implements that as a soft power-law saturation of Vov (equation
+above): identity for Vov ≪ kcap (subthreshold and the Ron limit untouched),
+asymptote kcap for Vov ≫ kcap, and **0 ≤ dVov_eff/dVov ≤ 1 everywhere** —
+which is what keeps the package-R solver's bracket invariant dg/dId ≤ −1
+intact. `m` sets the sharpness; the measured collapse is abrupt, so
+m ≈ 10 rather than the m = 1 of a tanh. The cap is applied **before Vk**
+(variant A): with a depleted pillar the pinch-off voltage is set by the
+depleted column, not by the surface charge. `kcap = 0` (default) is the exact
+identity, so every pre-cap anchor stays bit-identical — pinned by
+`tests/test_gate_cap.py`.
+
+*History:* the previous mechanism was `kappa`, a drain-bias-dependent series
+resistance. It is removed: `kappa` is a *voltage divider*, not a charge limit,
+and the fit made rd carry 75 % of the terminal voltage already at the ohmic
+Ron anchor (Vds = 0.483 V, Id = 14 A). The cap leaves rd a plain resistor and
+beat kappa on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and
+~1000× better conditioning.
 
 ### Package resistance (rd, rs)
 
@@ -85,10 +118,16 @@ Id   = f_intrinsic(Vds', Vgs')     (implicit; solved per data point)
 rs is not a pure series drop: it **degenerates the gate** (gm_eff = gm/(1 + rs·gm)).
 The implicit equation is solved with bracketed safeguarded Newton, never
 fixed-point iteration — in the ohmic region the fixed-point contraction factor
-is (rd+rs)·kp·Vov ≈ 1.6 for DEFAULT, which diverges. rd = rs = 0 takes the
-explicit fast path (bit-identical to the pre-package-R model; pinned by
-`tests/test_package_r.py`). Forward polarity only (Vds ≥ 0): the channel-only
-model is singular in reverse until the body diode exists.
+is (rd+rs)·kp·Vov ≈ 1.6 for DEFAULT, which diverges. The solver also carries a
+per-point **stall guard**: with the gate cap, `rs·Id` can drag the internal
+gate across the cap knee and make g(Id) flat-then-cliffy, putting Newton into
+a two-cycle that shrinks the bracket only ~1e-5 per iteration; if the bracket
+width fails to shrink by 10 % three consecutive times, Newton is vetoed and
+bisection forced until progress resumes (pinned by
+`tests/test_package_r.py::test_solver_survives_newton_two_cycle`).
+rd = rs = 0 takes the explicit fast path (bit-identical to the pre-package-R
+model; pinned by `tests/test_package_r.py`). Forward polarity only (Vds ≥ 0):
+the channel-only model is singular in reverse until the body diode exists.
 
 ## Layout
 
@@ -116,7 +155,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 27 tests
+pytest                            # 86 passed, 1 skipped (Tk digitizer test needs a display)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```

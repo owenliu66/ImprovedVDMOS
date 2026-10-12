@@ -220,6 +220,14 @@ def identifiability(
     opposite. For example vthk with kk = 0.1 V is fully saturated across a data
     set whose lowest Vgs is 2 V, so the kink transition is never sampled and
     vthk is unconstrained.
+
+    The dead test is RELATIVE to the strongest Jacobian column (1e-5 of it),
+    not an absolute threshold: a real datasheet fit has columns spanning many
+    orders of magnitude, and an absolute cutoff either misses genuinely dead
+    parameters (ST8L65 `ksub` measured 7.8e-7 of max yet was called live and
+    given a confident small sigma) or mislabels merely-weak ones. Correlations
+    and the condition number are computed over live columns only, so a dead
+    column can no longer fake a +/-1.000 pair or inflate cond.
     """
     jac = result.jac
     free = tuple(free)
@@ -227,7 +235,21 @@ def identifiability(
         return Identifiability({n: math.inf for n in free}, 0, len(free), math.inf, free, ())
 
     col_norm = np.linalg.norm(jac, axis=0)
-    tol = max(float(col_norm.max(initial=0.0)), 1.0) * 1e-10
+    col_max = float(col_norm.max(initial=0.0))
+    # Dead-column test is RELATIVE to the strongest column. The old absolute
+    # 1e-10 * max was ~5 orders of magnitude too permissive: on the ST8L65
+    # super-junction fit ksub's column measured 7.8e-7 of max -- provably dead
+    # (pinning it at 0.007/0.02/0.04/0.06/0.09 gives identical RMSE and
+    # identical other parameters) -- yet it was classified live and reported
+    # sigma_rel = 0.038, i.e. "determined to 4 %" for a parameter carrying
+    # zero information. That is precisely the pinv-returns-zero-variance trap
+    # this function exists to avoid, and it also manufactured a spurious
+    # ksub <-> vk = +1.000 correlation and inflated cond by ~3 orders.
+    # 1e-5 sits in the empty gap between real and dead: the weakest genuinely
+    # live columns measured in this project are ~3e-4 of max (theta/gds/vthk
+    # on the synthetic grid), while dead ones land at ~1e-6.
+    DEAD_REL_TOL = 1e-5
+    tol = max(col_max * DEAD_REL_TOL, max(col_max, 1.0) * 1e-10)
     dead = col_norm < tol
 
     svals = np.linalg.svd(jac, compute_uv=False)

@@ -135,6 +135,37 @@ def test_negative_rd_or_rs_raises():
         _solve_package_r(z + 1.0, z + 5.0, -1e-3, 0.0, lambda d, g: d)
 
 
+# ---------------------------------------------------------------- stall guard
+def test_solver_survives_newton_two_cycle():
+    """High-Vds extrapolation of the fitted super-junction set used to stall.
+
+    Around Vds ~ 178 V with the fitted cap set (rs = 4.64 mOhm, kcap = 1.91 V,
+    m = 9.87), g(Id) has two nearly flat shoulders (slope ~ -1.2) separated by
+    a steep gate-degeneration cliff: rs*Id pulls the internal gate below
+    threshold once Id passes ~1080 A. Newton maps each shoulder into the other,
+    both endpoints stay in-bracket, and the bracket then shrinks by only ~1e-5
+    per iteration -- 60 iterations were not enough and the solve raised
+    RuntimeError with a ~800 A residual. The stall detector forces bisection
+    after three consecutive non-halving iterations.
+
+    The grid step matters: the stall band is ~177.8-178.7 V, so a coarse
+    41-point sweep misses it entirely. 401 points (step 0.5 V) lands on it.
+    """
+    from vdmos_fit.model import _channel_current
+
+    p = Params(
+        kp=91.9481, vth0=4.7327, ksub=0.06, kcap=1.90909, m=9.86552,
+        theta=0.0, vsat=1e4, eta=0.0, lam=0.0383371, gds=6.75611e-5,
+        gk=0.0, vthk=1.6, kk=0.1, vk=0.653951, rd=26.03e-3, rs=4.644e-3,
+    )
+    rtot = p.rd + p.rs
+    vds = np.linspace(0.0, 200.0, 401)
+    ids = vdmos_id(vds, 10.0, p)  # the pre-guard solver raised here
+    assert np.all(np.isfinite(ids))
+    resid = np.abs(_channel_current(vds - rtot * ids, 10.0 - p.rs * ids, p) - ids)
+    assert (resid / np.maximum(np.abs(ids), 1e-12)).max() < 1e-8
+
+
 # ---------------------------------------------------------------- sanity sweeps
 def test_monotone_and_finite_with_package_r():
     """Same convention as test_improved_model_has_no_negative_gds: the known
