@@ -1,10 +1,12 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-11 (session 8). Companion to [README.md](../../README.md).*
+*Snapshot: 2026-10-13 (session 10). Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Eight sessions, all committed to `main`. The package provides one C¹ continuous
+Ten sessions, all committed to `main` (session 9 added the drain-knee softness
+exponent `nd`; session 10 re-fitted ST8L65 with it — see the nd section below).
+The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (kcap, m),
 mobility degradation via Vk, velocity saturation, bounded DIBL, gated CLM,
 one-sided trench kink — embedded with package series resistance rd/rs (implicit
@@ -20,10 +22,11 @@ subthreshold curve to a gate-independent floor; the off state is now the
 gate-dependent softplus floor). Diagnostics were hardened to match what the
 data can actually support: dead Jacobian columns report σ = inf rather than a
 confident small σ, and `on_bounds` flags pinned parameters relative to the
-bound's magnitude, not the search-box width. Current fit on ST8L65N044M9:
-**5.54 % relative RMSE (fit B), rank 9/9, cond 3.75e4, ksub live**, the
-Vgs(th) spec point reproduced exactly by the channel. 89 tests green, ruff
-clean. Datasheet Figure 3 (typical output curves) is on disk in `data/`.
+bound's magnitude, not the search-box width. Current best fit on ST8L65N044M9:
+**1.62 % relative RMSE (nd fit B, 10-param)** — see the session-10 section; the
+official 9-param reference (5.54 %, rank 9/9, cond 3.75e4, ksub live) is kept
+below for comparison. 98 tests green, ruff clean. Datasheet Figure 3 (typical
+output curves) is on disk in `data/`.
 
 ## What exists
 
@@ -118,23 +121,72 @@ datasheet data but unreproducible by any C¹ model (identical Id at
 Vds = 1.127 and 5.153 V requires β = 0 over a 4.6× interval, then
 β ≈ 0.12), and it costs 21.3 % on fit A.
 
+## ST8L65 fit with `nd` free (session 10)
+
+`scripts/fit_st8l65_nd.py`: same fit-A/fit-B recipe and DEVICE_BOUNDS, `nd`
+added to the free tuple (start 2.8 = legacy tanh; linear space, bound 0.5–40).
+Outputs `out/st8l65_nd_params.txt`, `out/st8l65_nd_probe.txt` (pre-fit
+sensitivity + identifiability + probes), `out/st8l65_nd_fit.png`,
+`out/st8l65_nd_percurve.png` (Id vs Vds at each measured Vgs — the Figure 3
+knee check), `out/st8l65_nd_overlay.png`.
+
+| | nd fit A (41 pts) | nd fit B (36 pts) | official fit B (nd = 0) |
+|---|---|---|---|
+| RMSE_rel | **3.89 %** (was 9.97) | **1.62 %** (was 5.54) | 5.54 % |
+| nd | **0.5 PINNED LOWER** | **0.5 PINNED LOWER** | 0 |
+| lam | 0.00314 — **un-pinned** | 0.00255 — **un-pinned** | 0.004 pinned UPPER |
+| plateau Vgs=10 @19.7 V | 246.3 A (+2.5 %) | 243.1 A (+1.2 %) | 223.9 A (−6.8 %) |
+| Vgs(th) point (3.7, 3.7) | 253.6 µA | 248.9 µA | 250.0 µA |
+| rd+rs | 31.5 mΩ | 33.5 mΩ | 30.5 mΩ |
+| ksub | 0.246 V | 0.258 V | 0.184 V |
+| rank / cond | 9/10 / 1.15e4 | 9/10 / 3.23e4 | 9/9 / 3.75e4 |
+
+Findings:
+
+- **The data wants a knee SOFTER than the legacy tanh**: nd lands on the 0.5
+  lower bound from every start that finds the basin (one nd = 6 start stays
+  stuck at 13.5 % — multi-start matters). Relaxed-bound probe (0.1, 40):
+  nd = 0.47, RMSE 1.59 % — the 0.5 sentinel guard costs ~0.03 pt and stays.
+- **Open problem 1 was a knee-SHAPE problem, not a missing element**: with nd
+  free, lam un-pins (0.0025–0.0031) and the plateau lands +1.2 % high instead
+  of −6.8 % low. The bounded bias-dependent drain element (Queue 2) is NOT
+  needed on this data; revisit only if a refit re-pins lam.
+- gds ≥ 0 everywhere for the nd fit (min 4e-8 S at the deep-off corner);
+  the vsat-divisor dip caveat does not apply here (vsat fixed at 1e4).
+- **theta↔vsat probe** (theta, vsat freed on fit-B data): both push to their
+  bounds (theta → 1.4e-4 LOWER, vsat → 100 UPPER) — the data rejects that
+  mechanism outright. corr(theta,vsat) = −0.848 shows up in the 12-param run
+  but nd is now the hub (nd↔ksub +0.988, nd↔kp −0.983, nd↔vsat +0.958):
+  the pair does not "loosen", it becomes moot.
+- **Knee cluster (kp, kcap, m, nd, vk, lam) strongly entangled**
+  (kp↔kcap −0.978, vth0↔kcap −0.981, kp↔vth0 +0.96); rank 9/10 with vk dead
+  in fit A (σ = inf) and barely sensed in fit B (σ_rel 719). Quote the curve
+  shape and rd+rs, never the individual knee parameters. The relaxed-bound
+  probe reaches the same RMSE with vk = 2.6 or vk = 200 — shape pinned,
+  mechanism split not.
+- ksub got worse as a one-point artifact (0.258 V ≈ 595 mV/dec). Queue 1
+  (digitise a near-threshold transfer curve) is now the top data priority.
+
 ## Open problems
 
-1. **lam pinned at its 0.004 bound in both fits** — the data wants more
+1. **lam pinned at its 0.004 bound in both 9-param fits** — the data wants more
    output slope than the cap allows, so the plateau is 5–7 % LOW (226/224 A
-   vs 240 A measured). A bias-dependent drain element is genuinely needed —
-   but NOT kappa-as-is (pole + divider physics). Candidate: a bounded
-   bias-dependent rd (e.g. `rd·(1 + kd·Vds)` with the same `dV/dI ≤ bound`
-   discipline, or JFET-style depletion of rd). Not yet tried.
+   vs 240 A measured). A bias-dependent drain element was the candidate fix —
+   **superseded by session 10**: with `nd` free the knee SHAPE supplies the
+   slope, lam un-pins and the plateau lands +1.2 %. Keep a bounded
+   bias-dependent element (e.g. `rd·(1 + kd·Vds)` with the same
+   `dV/dI ≤ bound` discipline) in reserve for datasets where a refit re-pins
+   lam; NOT kappa-as-is (pole + divider physics).
 2. **ksub one-point-anchored** — live in fit B (σ = 3.5) but ksub = 0.184 V
    implies ~420 mV/dec swing, not physical (~60–100 mV/dec); the single
    Vgs(th) point pins the *level*, not the *slope*. Dead in fit A (the Vgs=5
    curve fights the anchor). Fix the swing from a digitised near-threshold
    transfer curve; do NOT hard-fix ksub (pushes the anchor into vth0,
    corr +0.99).
-3. **Knee shape vs datasheet Figure 3** — the figure is now on disk
-   (`data/ST8L65N044M9_Id_Vds_Vgs.png`); the visual check of fit-B knee
-   softness (vk = 5.56 V, σ ≈ 150, barely sensed) against it is still due.
+3. **Knee shape vs datasheet Figure 3** — session 10 overlay plots
+   (`out/st8l65_nd_percurve.png`) show the nd fit matching the knee at every
+   measured Vgs; a formal digitisation of Figure 3 would quantify it, but the
+   visual check is done.
 4. **theta ↔ vsat 84 % correlated** (synthetic grid) — output curves alone
    cannot separate them; and `vthk` is barely sensed (σ ≈ 477 %, sensitivity
    ~2000× below kp) because kk = 0.1 V saturates the kink sigmoid above

@@ -1,80 +1,84 @@
-# Handover — ImprovedVDMOS (session 9 complete)
+# Handover — ImprovedVDMOS (session 10 complete)
 
 ## Current status
 
-Session 9 added the **drain-knee softness exponent `nd`** — the missing
-shape-only knob identified in session 8's knee analysis. It replaces the tanh
-soft-switch with the same power-law soft-min used for the gate cap:
+Session 10 executed session 9's "next tasks" in full.
 
-```
-v = Vk·tanh(Vds/Vk)                     nd = 0  (default, legacy)
-v = Vds/(1 + (Vds/Vk)^nd)^(1/nd)        nd > 0
-```
+**Session-9 (nd) work: committed** as `7c771e1 add knee softness parameter`
+(params.py nd field + bounds, model.py shared `_soft_min`, README section,
+tests/test_drain_softness.py). 98 tests green (1 headless skip), ruff clean.
 
-Shape-only by construction: `dv/dVds(0) = 1` and `v → Vk` hold for every `nd`,
-so Ron and the Id,sat plateau are untouched while the knee width shrinks
-monotonically with `nd` (nd ≈ 2.8 reproduces the legacy tanh, L2 rms
-0.024·Vk). This decouples knee width from knee position, which theta/vsat
-could not do (they are ~84 % correlated in fits). `nd = 0` keeps every
-pre-nd anchor bit-identical — pinned by `tests/test_drain_softness.py`
-(9 new tests: bit-identity, 0 ≤ dv/dVds ≤ 1 solver-bracket invariant,
-asymptotes, shape-only sweep, no-NDR, synthetic round trip recovering nd).
+**ST8L65 refit with nd free** — new script `scripts/fit_st8l65_nd.py`
+(same fit-A/fit-B recipe and DEVICE_BOUNDS as fit_st8l65.py; nd added to
+the free tuple, started near 2.8, linear space bound 0.5–40):
 
-Files touched: `params.py` (nd field, bounds (0.5, 40), deliberately NOT in
-LOG_PARAMS — 0 is the sentinel — and NOT in DEFAULT_FREE, same rationale as
-kcap/m), `model.py` (cap math refactored into shared `_soft_min`, log-space,
-sign-preserving for negative Vds), README ("Drain-knee softness (nd)"
-section), new test file. **98 tests (96 pass + 2 headless skips), ruff clean.**
+| | nd fit A | nd fit B | official 9-param fit B |
+|---|---|---|---|
+| RMSE_rel | **3.89 %** (was 9.97) | **1.62 %** (was 5.54) | 5.54 % |
+| nd | 0.5 PINNED LOWER | 0.5 PINNED LOWER | 0 |
+| lam | un-pinned (0.0031) | un-pinned (0.0025) | 0.004 pinned |
+| plateau Vgs=10 | 246.3 A (+2.5 %) | 243.1 A (+1.2 %) | 223.9 A (−6.8 %) |
+| rank / cond | 9/10 / 1.15e4 | 9/10 / 3.23e4 | 9/9 / 3.75e4 |
 
-**The session-9 work is UNCOMMITTED on disk** — review and commit first.
+Headline findings (details + full correlation tables in
+`src/vdmos_fit/STATUS.md`, "ST8L65 fit with nd free"):
 
-Caveat found while testing (pre-existing, not a regression): with the DEFAULT
-demo set (vsat = 1.5 ≪ Vk ≈ 5 V) the velocity-saturation divisor creates a
-mild gds dip near the knee even at nd = 0 (−1.9 S at Vds ≈ 6 V, Vgs = 10;
-the −2.0 S tolerance in `test_improved_model_has_no_negative_gds` was already
-absorbing it). A sharp `nd` deepens it. Property of those parameters, not of
-the switch — documented in README; refit vsat up or nd down if a device lands
-there.
+- The data wants a knee **softer than the legacy tanh**: nd hits the 0.5
+  lower bound from every basin-finding start. Relaxed-bound probe (0.1, 40)
+  lands at nd = 0.47 for 1.59 % — the 0.5 sentinel guard costs ~0.03 pt;
+  keep it. nd -> 0 collapses the current, so lower is not physical anyway.
+- The −6 % plateau deficit and the lam bound-pin (old open problem 1) were
+  knee-SHAPE problems: nd free un-pins lam and fixes the plateau. Queue 2
+  (bias-dependent drain element) is NOT needed on this data.
+- theta↔vsat probe: freeing theta/vsat pushes both to their bounds — the
+  data rejects that mechanism; corr(theta,vsat) = −0.848 appears in the
+  12-param run but nd is now the correlation hub (nd↔ksub +0.988). The
+  pair becomes moot rather than loosening.
+- Knee cluster (kp, kcap, m, nd, vk, lam) is strongly entangled; rank 9/10
+  (vk dead in fit A, σ_rel = 719 in fit B). Quote shape + rd+rs only, never
+  individual knee parameters. gds ≥ 0 everywhere for the nd fit.
+- One multi-start caution: the nd = 6 start stays stuck at 13.5 % — always
+  multi-start when freeing nd.
 
-Session-8 state still stands: model/fitter/diagnostics in intended final
-shape for the static-I-V scope; official fit ST8L65N044M9 fit B, **5.54 %
-relative RMSE, rank 9/9, cond 3.75e4** (table in `src/vdmos_fit/STATUS.md`).
-Datasheet Figure 3 on disk: `data/ST8L65N044M9_Id_Vds_Vgs.png`.
+**Saved to `out/`** (gitignored): `st8l65_nd_params.txt` (both fits, same
+format as the capfit file), `st8l65_nd_probe.txt` (pre-fit sensitivity_report
++ FitResult.summary + identifiability summary + theta/vsat and nd-bound
+probes), `st8l65_nd_fit.png` (full + knee zoom, nd vs official),
+`st8l65_nd_percurve.png` (Id vs Vds at each measured Vgs — the Figure 3
+knee check, matches at every Vgs), `st8l65_nd_overlay.png`.
+
+**Decision left open (user's call):** promote nd fit B (1.62 %) to "official"
+despite nd pinned at the bound + rank 9/10, or keep the 9-param fit as the
+quoted reference. STATUS.md currently presents nd fit B as best fit and keeps
+the 9-param table as the official reference.
 
 ## Next tasks (do these first, before the Queue)
 
-1. **Commit the session-9 (nd) work** after a quick review.
-2. **Re-run the ST8L65N044M9 fit with the updated model**
-   (`scripts/fit_st8l65.py`, fit-B recipe and DEVICE_BOUNDS). Free `nd`
-   explicitly — it is not in DEFAULT_FREE; add it to the free tuple, start
-   near 2.8 (≈ legacy tanh), fitted in linear space (lower bound 0.5).
-   Compare relative RMSE against the official 5.54 % and check whether the
-   theta↔vsat ~84 % correlation pair loosens now that knee width has its
-   own knob. Watch `on_bounds` (nd pinned at 0.5 or 40 means the data does
-   not want the new shape).
-3. **Save to `out/`**: the fitted parameters (same format as
-   `out/fitted_params.txt`) AND the convergence/identifiability probe —
-   `FitResult.summary()` plus `identifiability(res).summary()` (rank, cond,
-   sigma_rel, pinned bounds, |corr| > 0.8 pairs) — as a text file. Include
-   the pre-fit `sensitivity_report` if it is cheap.
-4. **Plot Id vs Vds at each measured Vgs point** (the Vgs grid of the
-   digitised CSV in `data/`), measured vs fitted overlay (`plotting.py`
-   overlay machinery), PNGs into `out/`. This is also the visual check for
-   task 4 of the Queue (knee shape vs Figure 3) — the nd fit should now be
-   able to match the knee without dragging the plateau.
+1. **Commit the session-10 work** — `scripts/fit_st8l65_nd.py` + STATUS.md
+   updates are UNCOMMITTED on disk.
+2. Decide the "official fit" question above (promote nd-B or annotate).
+3. If promoted: re-check the model anchors/tests against the nd regime
+   (nd = 0.5 soft-min at vk ~ 2.6: confirm solver bracket invariant and
+   no gds dip in the vsat-on demo set too).
 
 ## Queue
 
 1. Digitise a near-threshold transfer curve to pin the real subthreshold
-   swing (fit B ksub = 0.184 V ≈ 420 mV/dec is a one-point anchor artifact).
-2. Bounded bias-dependent drain element to un-pin lam (0.004 UPPER) and fix
-   the −6 % plateau — NOT kappa-as-is.
-3. α/β ladders vs fit B (β ladder should now be too shallow at high Vgs).
-4. Knee-shape check of fit B vs Figure 3 (figure now on disk; see Next
-   task 4 — nd is the tool for this).
-5. Body diode / reverse polarity + HV leakage — biggest model hole; the
+   swing — now the TOP priority: the nd fit pushed ksub to 0.258 V
+   (~595 mV/dec), an even more obvious one-point-anchor artifact.
+2. ~~Bounded bias-dependent drain element~~ — **dropped for this dataset**
+   (nd fixed the plateau and un-pinned lam). Keep the `rd·(1 + kd·Vds)`
+   idea in reserve for datasets that re-pin lam.
+3. α/β ladders vs the nd fit B (β ladder should now be too shallow at high
+   Vgs — recheck against the new fit).
+4. Knee-shape check vs Figure 3 — visual check done (out/st8l65_nd_percurve.png);
+   formal digitisation of Figure 3 would quantify it.
+5. Knee-cluster identifiability: the shape is pinned but the kp/kcap/m/nd/vk/lam
+   split is not (rank 9/10, |corr| up to 0.99). Dense knee-region data
+   (Vds 0.5–8 V, fine Vgs steps) is what would break it.
+6. Body diode / reverse polarity + HV leakage — biggest model hole; the
    package-R path is Vds ≥ 0 only.
-6. Then the architecture: Q(V), Tj node, LTspice export, CI.
+7. Then the architecture: Q(V), Tj node, LTspice export, CI.
 
-`.vscode/` remains untracked (user's call). `out/` is gitignored; current
-contents are the fresh 9-param run plus `nd_knee_sweep.png` (session-9 demo).
+`.vscode/` remains untracked (user's call). `out/` is gitignored; new
+contents are the nd run (`st8l65_nd_*`) plus `_nd_fit_run.log`.
