@@ -42,6 +42,15 @@ class Params:
                    a hard clip at kcap. Only meaningful when kcap > 0.
     theta : float  Mobility-degradation coefficient [1/V] -> Vk = Vov/(1+theta*Vov).
     vsat : float   Velocity-saturation knee [V]; sets Id,sat ~ Vov**alpha, alpha < 2.
+    nd : float     Drain-knee softness exponent [-]; 0 = legacy tanh soft-switch.
+                   nd > 0 replaces v = Vk*tanh(Vds/Vk) with the SAME power-law
+                   soft-min used for the gate cap: v = Vds/(1 + (Vds/Vk)**nd)**(1/nd).
+                   Shape-only knob: dv/dVds(0) = 1 and v -> Vk hold for every nd,
+                   so Ron and the Id,sat plateau are untouched while the knee
+                   WIDTH scales with nd (nd -> inf is a hard min, nd = 1 is the
+                   harmonic soft-min; nd ~ 2.8 reproduces the legacy tanh).
+                   "Off" is the default 0 -- freeing it changes the knee shape,
+                   so it stays out of DEFAULT_FREE like kcap/m.
     eta : float    DIBL coefficient [1/V].
     lam : float    Channel/drift-length modulation [1/V].
     gk : float     Trench kink (parasitic accumulation channel) conductance [S].
@@ -67,6 +76,7 @@ class Params:
     m: float = 1.0
     theta: float = 0.015
     vsat: float = 1.5
+    nd: float = 0.0
     eta: float = 0.02
     lam: float = 0.02
     gk: float = 0.4
@@ -90,6 +100,7 @@ PARAM_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Params))
 
 # Parameters fitted in log space (strictly positive, span decades).
 # kcap is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
+# nd likewise: 0 is the legitimate "legacy tanh" value.
 LOG_PARAMS: frozenset[str] = frozenset(
     {"kp", "ksub", "theta", "vsat", "eta", "lam", "gk", "kk", "vk", "m"}
 )
@@ -107,6 +118,10 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "m": (0.5, 40.0),
     "theta": (1e-4, 5.0),
     "vsat": (0.05, 100.0),
+    # Linear space; lower bound above 0 for the same reason as kcap -- a free
+    # nd must never enter the 0..0.5 region where the sentinel 0 ("legacy
+    # tanh") and a fitted value are numerically indistinguishable.
+    "nd": (0.5, 40.0),
     "eta": (1e-5, 1.0),
     "lam": (1e-6, 5.0),
     "gk": (1e-12, 100.0),

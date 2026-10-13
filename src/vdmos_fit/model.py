@@ -7,7 +7,8 @@
     Vov     = ksub*ln(1 + exp((Vgs - Vth)/ksub))   smooth subthreshold -> strong inversion
     Vov_eff = Vov/(1 + (Vov/kcap)**m)**(1/m)       soft charge cap (kcap = 0 -> off)
     Vk      = Vov_eff/(1 + theta*Vov_eff)          knee voltage (field-dependent mobility)
-    v       = Vk*tanh(Vds/Vk)                      soft drain variable (replaces the knee switch)
+    v       = Vk*tanh(Vds/Vk)                      soft drain variable (nd = 0, legacy)
+            = Vds/(1 + (Vds/Vk)**nd)**(1/nd)       power-law soft-min (nd > 0)
 
 With theta = vsat = eta = gk = 0 this is a smooth approximation of the Level-1
 equations with m_triode = 1: exact in the ohmic limit and in deep saturation,
@@ -72,7 +73,17 @@ def _channel_current(vds, vgs, p: Params) -> np.ndarray:
     vknee = np.maximum(vov / (1.0 + p.theta * vov), p.vov_floor)
 
     # 4) Soft drain variable: v -> Vds for Vds << Vk, v -> Vk for Vds >> Vk.
-    v = vknee * np.tanh(vds / vknee)
+    #    nd = 0 (default) keeps the legacy tanh soft-switch. nd > 0 uses the
+    #    same power-law soft-min as the gate cap, which decouples the knee
+    #    WIDTH from the knee voltage: dv/dVds(0) = 1 and v -> Vk hold for
+    #    every nd, so Ron and the Id,sat plateau are untouched while the
+    #    transition sharpens (nd -> inf is a hard min) or softens (nd = 1,
+    #    harmonic). Sign-preserving so negative Vds stays finite (the model
+    #    is unphysical there until the body diode, but must not emit NaN).
+    if p.nd == 0.0:
+        v = vknee * np.tanh(vds / vknee)
+    else:
+        v = np.sign(vds) * _soft_min(np.abs(vds), vknee, p.nd)
 
     # 5) Unified channel charge term (triode + saturation in one C^1 expression).
     ich = p.kp * vov * (v - 0.5 * v * v / vknee)
@@ -91,6 +102,20 @@ def _channel_current(vds, vgs, p: Params) -> np.ndarray:
     return ich + ikink
 
 
+def _soft_min(x, k, n):
+    """Power-law soft-min (x**-n + k**-n)**(-1/n) = x/(1 + (x/k)**n)**(1/n).
+
+    Log-space (logaddexp) so x**n cannot overflow (n ~ 10-40 is a fitted
+    regime). Requires x >= 0, k > 0, n > 0. Properties (shared by the gate
+    cap and the drain soft-switch): identity for x << k, asymptote k for
+    x >> k, derivative (1 + (x/k)**n)**(-1/n - 1) so 0 <= df/dx <= 1 --
+    which is what keeps the package-R solver bracket invariant
+    dg/dId <= -1 intact. """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = n * (np.log(np.maximum(x, 1e-300)) - np.log(k))
+    return x * np.exp(-np.logaddexp(0.0, t) / n)
+
+
 def _soft_cap(vov, kcap: float, m: float):
     """Soft power-law cap vov/(1 + (vov/kcap)**m)**(1/m), evaluated in log space.
 
@@ -101,9 +126,7 @@ def _soft_cap(vov, kcap: float, m: float):
     """
     if kcap <= 0.0:
         return vov
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = m * (np.log(np.maximum(vov, 1e-300)) - np.log(kcap))
-    return vov * np.exp(-np.logaddexp(0.0, t) / m)
+    return _soft_min(vov, kcap, m)
 
 
 def _solve_package_r(

@@ -47,6 +47,7 @@ never change Id,sat = ½·Kp·Vov². Consequences:
 | Off-state slope | undefined | softplus subthreshold floor, gate-dependent |
 | Trench kink | none | one-sided sigmoid |
 | Gate-charge saturation (α collapse at high Vgs) | none | soft cap `kcap`, `m` (off by default) |
+| Knee width vs knee position | locked (mtriode moves both) | independent shape knob `nd` (off by default) |
 
 ## Model
 
@@ -58,7 +59,8 @@ Vth     = Vth0 − η·Vds·tanh(Vds/Vk)              DIBL, bounded
 Vov     = ksub·ln(1 + exp((Vgs − Vth)/ksub))     smooth subthreshold → strong inversion
 Vov_eff = Vov/(1 + (Vov/kcap)^m)^(1/m)           soft gate-charge cap (kcap = 0 → off)
 Vk      = Vov_eff/(1 + θ·Vov_eff)                vertical-field mobility degradation
-v       = Vk·tanh(Vds/Vk)                        soft drain variable (replaces the knee switch)
+v       = Vk·tanh(Vds/Vk)                        soft drain switch (nd = 0, legacy)
+        = Vds/(1 + (Vds/Vk)^nd)^(1/nd)           power-law soft-min (nd > 0)
 ```
 
 Setting `θ = vsat = η = gk = 0` makes the model a smooth approximation of
@@ -95,6 +97,27 @@ The previous mechanism, `kappa` (a drain-bias-dependent series resistance), was
 removed: `kappa` is a *voltage divider*, not a charge limit, and the cap beat it
 on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and ~1000× better
 conditioning.
+
+### Drain-knee softness (nd)
+
+θ and vsat move the knee position **and** width together — they are ~84 %
+correlated in fits because both flatten the knee while setting it, and the
+tanh soft-switch ties the transition width to `Vk` itself. `nd` breaks that
+coupling: it replaces the tanh with the **same power-law soft-min** used for
+the gate cap, `v = Vds/(1 + (Vds/Vk)^nd)^(1/nd)`. Shape-only by construction:
+`dv/dVds(0) = 1` and `v → Vk` hold for every `nd`, so **Ron and the Id,sat
+plateau are untouched** while the knee width shrinks monotonically with `nd`
+(`nd → ∞` is a hard min, `nd = 1` the harmonic soft-min; `nd ≈ 2.8` reproduces
+the legacy tanh knee, L2 rms 0.024·Vk). Same log-space evaluation and the same
+`0 ≤ dv/dVds ≤ 1` derivative bound as the cap, so the package-R solver bracket
+invariant survives. `nd = 0` (default) is the exact legacy tanh — every
+pre-nd anchor stays bit-identical (`tests/test_drain_softness.py`). Caveat:
+with the DEFAULT demo set (`vsat = 1.5 ≪ Vk ≈ 5 V`) the velocity-saturation
+divisor creates a mild gds dip near the knee *even at nd = 0* (−1.9 S at
+Vds ≈ 6 V, absorbed by the −2.0 S tolerance in
+`test_improved_model_has_no_negative_gds`); a sharper `nd` deepens it. That is
+a property of those parameters, not of the switch — refit `vsat` up or `nd`
+down if a device lands in that regime.
 
 ### Off state
 
@@ -287,7 +310,9 @@ at 1.0 in float) and decays smoothly to zero below.
   for the low-VT anchor device and only needed for super-junction /
   long-drift parts, where it must be freed explicitly (see
   `scripts/fit_st8l65.py`). Adding them to the default set would silently
-  change every existing fit and anchor.
+  change every existing fit and anchor. Same rationale for `nd`: 0 is the
+  legacy tanh, it is fitted in linear space (0 cannot be logged), and its
+  lower bound 0.5 keeps a free `nd` away from the sentinel.
 - `vov_floor` is a numerical floor on Vk — keep fixed, never fitted.
 
 ### Fitter diagnostics
