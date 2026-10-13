@@ -52,15 +52,16 @@ never change Id,sat = ½·Kp·Vov². Consequences:
 ## Model
 
 ```
-I_D = kp·Vov_eff·(v − v²/(2Vk)) / (1 + v/vsat) · (1 + λ·Vds·tanh(Vds/Vk))
-      + gk·Vds·tanh((Vgs − Vth_k)/kk)·tanh(Vds/Vk)
+Id  = kp·vov·(v − v²/(2·vknee)) / (1 + v/vsat) · (1 + lam·vds·gate)
+      + gk·vds·kink_gate·gate
 
-Vth     = Vth0 − η·Vds·tanh(Vds/Vk)              DIBL, bounded
-Vov     = ksub·ln(1 + exp((Vgs − Vth)/ksub))     smooth subthreshold → strong inversion
-Vov_eff = Vov/(1 + (Vov/kcap)^m)^(1/m)           soft gate-charge cap (kcap = 0 → off)
-Vk      = Vov_eff/(1 + θ·Vov_eff)                vertical-field mobility degradation
-v       = Vk·tanh(Vds/Vk)                        soft drain switch (nd = 0, legacy)
-        = Vds/(1 + (Vds/Vk)^nd)^(1/nd)           power-law soft-min (nd > 0)
+gate      = tanh(vds/vk)                            drain-bias gate: 0 ohmic, ~1 above knee
+vth       = vth0 − eta·vds·gate                     DIBL, bounded
+vov       = ksub·ln(1 + exp((vgs − vth)/ksub))      smooth subthreshold → strong inversion
+vov       = vov/(1 + (vov/kcap)^m)^(1/m)            soft gate-charge cap (kcap = 0 → off)
+vknee     = max(vov/(1 + theta·vov), vov_floor)     vertical-field mobility degradation
+v         = vds/(1 + (vds/vknee)^nd)^(1/nd)         soft drain switch (nd = 0 → legacy tanh)
+kink_gate = 0.5·(1 + tanh((vgs − vthk)/kk))         one-sided trench-kink gate
 ```
 
 Setting `θ = vsat = η = gk = 0` makes the model a smooth approximation of
