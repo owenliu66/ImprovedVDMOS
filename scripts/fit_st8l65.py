@@ -1,5 +1,11 @@
 """Fit the ST8L65N044M9 (650 V, 36-44 mOhm super-junction FET) static data.
 
+**SUPERSEDED as the official reference (2026-10-13)**: the quoted ST8L65 fit is
+now fit A of `scripts/fit_st8l65_nd.py` (10-param with the drain-knee softness
+exponent `nd` free, 3.79 % vs this script's 5.54 %). Kept as the 9-param
+nd = 0 baseline and for the kappa -> cap history; do not quote its numbers as
+the device model.
+
 Gate-overdrive charge cap (kcap, m) fit -- the mechanism that replaced the
 removed `kappa` (drain-bias-dependent series resistance; see STATUS.md and
 the model docstring). The cap keeps rd a plain resistor and reproduces the

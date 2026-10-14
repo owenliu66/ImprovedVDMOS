@@ -4,26 +4,37 @@ Session-10 follow-up to scripts/fit_st8l65.py (handover "Next tasks" 2-4):
 same fit-B recipe and DEVICE_BOUNDS, but `nd` is added to the free tuple
 (it is deliberately NOT in DEFAULT_FREE) and started near 2.8, which
 reproduces the legacy tanh knee (session-9 knee analysis). `nd` is fitted
-in LINEAR space with lower bound 0.5 -- 0 is the "legacy tanh" sentinel and
-must stay reachable only by leaving nd out of the free set, never by the
-optimizer landing near 0.
+in LINEAR space with lower bound 0.1 (relaxed from 0.5 after the probe
+landed at 0.47) -- 0 is the "legacy tanh" sentinel and must stay reachable
+only by leaving nd out of the free set, never by the optimizer landing
+near 0.
 
 Questions this run answers:
-  * Does freeing nd beat the official 5.54 % (fit B) / 9.97 % (fit A)?
-  * Does nd pin at 0.5 or 40 (on_bounds)? Pinned = the data does not want
+  * Does freeing nd beat the previous official 9-param fit (9.97 % fit A /
+    5.54 % fit B)?  Yes -- and fit A is now the OFFICIAL reference below.
+  * Does nd pin at 0.1 or 40 (on_bounds)? Pinned = the data does not want
     the new shape.
   * Does the theta<->vsat ~84 % correlated pair loosen now that knee width
     has its own knob? Checked with two EXPLORATORY runs on the fit-B data
     that additionally free theta and vsat: 11-param (no nd) vs 12-param
     (with nd); compare the theta<->vsat correlation from identifiability().
 
+OFFICIAL STATUS (promoted 2026-10-13): **fit A of this script, 10-param with
+nd free, 3.79 % relative RMSE on the full 41-point set**, is the quoted
+reference for ST8L65N044M9. It supersedes the 9-param fit B (5.54 %,
+scripts/fit_st8l65.py) -- see STATUS.md "Current ST8L65 fit". lam and vk
+report sigma = inf (NOT SENSED): the dataset stops at Vds = 20 V and never
+enters deep saturation, so no CLM/drain-gate information exists to sense.
+That is expected, not a fit failure; the knee SHAPE (nd + kcap + m) and
+rd+rs are what the data pins.
+
 Outputs (out/):
   st8l65_nd_params.txt   fitted parameters, same format as the capfit file
   st8l65_nd_probe.txt    sensitivity_report + FitResult.summary() +
                          identifiability().summary() per fit
-  st8l65_nd_fit.png      full curves + knee zoom, nd fit vs official fit B
-  st8l65_nd_percurve.png Id vs Vds per measured Vgs, data vs nd fit vs
-                         official fit B (knee-shape check vs Figure 3)
+  st8l65_nd_fit.png      full curves + knee zoom, official fit A vs nd fit B
+  st8l65_nd_percurve.png Id vs Vds per measured Vgs, data vs nd fit A vs
+                         nd fit B (knee-shape check vs Figure 3)
 
     python scripts/fit_st8l65_nd.py
 """
@@ -42,23 +53,33 @@ import numpy as np  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from vdmos_fit import CurveSet, Params, fit, load_csv, vdmos_id  # noqa: E402
+from vdmos_fit import (  # noqa: E402
+    ST8L65_FIT_A_FREE,
+    ST8L65_OFFICIAL,
+    ST8L65_OFFICIAL_RMSE_REL,
+    CurveSet,
+    Params,
+    fit,
+    load_csv,
+    vdmos_id,
+)
 from vdmos_fit.fit import FitResult, identifiability, sensitivity_report  # noqa: E402
+from vdmos_fit.params import BOUNDS  # noqa: E402
 from vdmos_fit.plotting import overlay_data  # noqa: E402
 
 CSV = ROOT / "data" / "ST8L65N044M9_IV.csv"
 OUT = ROOT / "out"
 
-# Official 9-param reference (STATUS.md table, scripts/fit_st8l65.py).
+# OFFICIAL reference -- lives in the package (vdmos_fit.reference) so the
+# test suite can pin it too. This script's fit A is what produced it; the
+# drift check in main() confirms each run still reproduces the record
+# (OFFICIAL_TOL). Supersedes the 9-param fit B of scripts/fit_st8l65.py.
 OFFICIAL = {
-    "label": "official fit B (9-param, nd=0)",
-    "rmse_rel": 0.0554,
-    "params": Params(
-        kp=50.5805, vth0=4.44589, ksub=0.183585, kcap=2.90428, m=10.2408,
-        theta=0.0, vsat=1e4, eta=0.0, lam=0.004, gk=0.0, vthk=1.6, kk=0.1,
-        vk=5.5617, rd=0.0298458, rs=0.000657247,
-    ),
+    "label": "official fit A (10-param, nd free)",
+    "rmse_rel": ST8L65_OFFICIAL_RMSE_REL,
+    "params": ST8L65_OFFICIAL,
 }
+OFFICIAL_TOL = 1e-3   # max relative drift allowed before the record is stale
 
 # Same re-anchored start as fit_st8l65.py, plus nd near the legacy-tanh value.
 START = Params(
@@ -67,15 +88,17 @@ START = Params(
     gk=0.0, vthk=1.6, kk=0.1, vk=10.0, rd=0.030, rs=0.005,
 )
 
-# 9-param free set + nd (explicitly freed -- NOT in DEFAULT_FREE).
-FREE = ("kp", "vth0", "ksub", "lam", "rd", "rs", "vk", "kcap", "m", "nd")
+# 9-param free set + nd (explicitly freed -- NOT in DEFAULT_FREE). Same
+# tuple as the promoted official record (vdmos_fit.ST8L65_FIT_A_FREE).
+FREE = ST8L65_FIT_A_FREE
 
-# Identical per-device bounds to fit_st8l65.py. nd keeps its global
-# (0.5, 40) linear bound; do NOT override it here.
+# Per-device bounds to fit_st8l65.py, EXCEPT lam: the global (1e-12, 1.0)
+# bound now governs (session-10 bound widening -- the old 0.004 cap pinned
+# lam at its LOWER 1e-6 and hid whether the data wants CLM at all).
+# nd keeps its global (0.1, 40) linear bound; do NOT override it here.
 DEVICE_BOUNDS = {
     "rd": (0.0, 0.036),
     "rs": (0.0, 0.036),
-    "lam": (1e-6, 0.004),
 }
 
 # Same four basins as fit_st8l65.py, nd started near 2.8 (legacy tanh) with
@@ -150,7 +173,7 @@ def nd_bound_probe(data_b: CurveSet, p_nd: Params) -> str:
     Also exposes knee-cluster degeneracy: different vk/kp/lam splits
     reaching the same RMSE mean the SHAPE is pinned, not the mechanism.
     """
-    lines = ["", "nd lower-bound probe (fit-B data, bound relaxed to (0.1, 40)):"]
+    lines = ["", "nd lower-bound probe (fit-B data, global lower bound 0.1):"]
     bounds = {**DEVICE_BOUNDS, "nd": (0.1, 40.0)}
     for nd0 in (0.5, 0.3):
         res = fit(data_b, start=p_nd.replace(nd=nd0), free=FREE,
@@ -162,6 +185,35 @@ def nd_bound_probe(data_b: CurveSet, p_nd: Params) -> str:
             f" kp={q.kp:.4g} lam={q.lam:.4g}"
             + ("  [on_bounds: " + ",".join(res.on_bounds()) + "]"
                if res.on_bounds() else "")
+        )
+    return "\n".join(lines)
+
+
+def lam_cap_probe(data_b: CurveSet) -> str:
+    """Does dropping the old per-device lam cap (1e-6, 0.004) change anything?
+
+    The session-9/10 fits pinned lam at that cap's LOWER bound, so the global
+    widening to (1e-12, 1.0) is inert unless the override is removed. Refit
+    fit B both ways from the same starts and report RMSE + pinned set.
+    """
+    lines = ["", "lam cap probe (fit-B data):"]
+    for tag, ov in (("lam capped (1e-6, 0.004)",
+                     {**DEVICE_BOUNDS, "lam": (1e-6, 0.004)}),
+                    ("lam free (global 1e-12, 1.0)", DEVICE_BOUNDS)):
+        best = None
+        for s in MULTI_START:
+            st = START.replace(**s)
+            res = fit(data_b, start=st, free=FREE, weight="relative",
+                      max_nfev=8000, bounds_overrides=ov)
+            if best is None or res.rmse_rel < best.rmse_rel:
+                best = res
+        q = best.params
+        lines.append(
+            f"  {tag}: RMSE {best.rmse_rel * 100:.2f} %"
+            f" | lam={q.lam:.4g} kp={q.kp:.4g} vk={q.vk:.4g}"
+            f" nd={q.nd:.4g} kcap={q.kcap:.4g} m={q.m:.4g}"
+            + ("  [on_bounds: " + ",".join(best.on_bounds()) + "]"
+               if best.on_bounds() else "  [no param pinned]")
         )
     return "\n".join(lines)
 
@@ -235,7 +287,7 @@ def plot_per_curve(data: CurveSet, fits: dict[str, Params], path: Path) -> None:
     vgs = data.vgs_grid()
     ncol = 4
     nrow = int(np.ceil(len(vgs) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(4.0 * ncol, 3.2 * nrow),
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.0 * ncol, 3.4 * nrow),
                              squeeze=False)
     for ax, vg in zip(axes.ravel()[:len(vgs)], vgs, strict=True):
         m = np.isclose(data.vgs, vg)
@@ -252,7 +304,11 @@ def plot_per_curve(data: CurveSet, fits: dict[str, Params], path: Path) -> None:
         ax.legend(fontsize=7)
     for ax in axes.ravel()[len(vgs):]:
         ax.set_visible(False)
-    fig.suptitle("Id vs Vds at each measured Vgs: data vs nd fit vs official fit B")
+    # Generous vertical gaps: the per-panel titles were colliding with the
+    # x-label of the row above and with the suptitle.
+    fig.subplots_adjust(hspace=0.72, wspace=0.45, top=0.885, bottom=0.09)
+    fig.suptitle("Id vs Vds at each measured Vgs: data vs nd fit A vs nd fit B",
+                 y=0.995)
     fig.savefig(path, dpi=110, bbox_inches="tight")
     print(f"wrote {path}")
 
@@ -261,7 +317,7 @@ def main() -> None:
     data = load_csv(CSV)
     print(f"{data.label}: {len(data)} points, Vgs grid {data.vgs_grid()}")
     print(f"free = {FREE}")
-    print(f"device bounds overrides = {DEVICE_BOUNDS} (nd keeps global (0.5, 40))")
+    print(f"device bounds overrides = {DEVICE_BOUNDS} (nd keeps global (0.1, 40))")
 
     probe: list[str] = []
     sens = sensitivity_report(START, data, FREE)
@@ -274,14 +330,26 @@ def main() -> None:
     res_a = multi_fit(data)
     report(res_a, data, "nd A, full data")
 
+    # The official record IS fit A: confirm the run still reproduces it.
+    drift = max(abs(getattr(res_a.params, n) - getattr(OFFICIAL["params"], n))
+                / max(abs(getattr(OFFICIAL["params"], n)), 1e-12)
+                for n in FREE)
+    print(f"official-record drift vs this run's fit A: {drift:.2e}"
+          + ("  [OK]" if drift < OFFICIAL_TOL else
+             f"  [STALE: > {OFFICIAL_TOL:g} -- re-promote fit A]"))
+
     print("\n--- fit B: WITHOUT the Vgs = 5 curve, nd free ---")
     data_b = data.subset(~np.isclose(data.vgs, 5.0))
     res_b = multi_fit(data_b)
     report(res_b, data_b, "nd B, no Vgs=5")
 
-    print(f"\nofficial reference: fit A 9.97 % | fit B {OFFICIAL['rmse_rel'] * 100:.2f} %")
-    print(f"nd fit:             fit A {res_a.rmse_rel * 100:.2f} %"
-          f" | fit B {res_b.rmse_rel * 100:.2f} %")
+    probe_txt = lam_cap_probe(data_b)
+    print(probe_txt)
+    probe.append(probe_txt)
+
+    print("\nprevious official (9-param, nd=0): fit A 9.97 % | fit B 5.54 %")
+    print(f"OFFICIAL now = fit A here:  fit A {res_a.rmse_rel * 100:.2f} %"
+          f" | fit B (no Vgs=5) {res_b.rmse_rel * 100:.2f} %")
 
     probe_txt = theta_vsat_probe(data_b)
     print(probe_txt)
@@ -301,15 +369,24 @@ def main() -> None:
     txt = OUT / "st8l65_nd_params.txt"
     head = (res_a.summary()
             + "\n\n--- without Vgs = 5 curve ---\n" + res_b.summary())
+
+    def pinned(res: FitResult) -> str:
+        pb = res.on_bounds()
+        return "none" if not pb else ", ".join(f"{k} {v}" for k, v in pb.items())
+
     tail = (
         f"\n\nRMSE_rel: full {res_a.rmse_rel * 100:.2f} %"
         f" | no-Vgs5 {res_b.rmse_rel * 100:.2f} %"
-        f"\nofficial 9-param reference (nd=0): full 9.97 % | no-Vgs5 5.54 %."
-        "\nnd pinned at LOWER 0.5 = the data wants a knee SOFTER than the legacy"
-        " tanh (nd=2.8); the relaxed-bound probe lands at nd=0.47 for ~0.03 pt"
-        " gain, so the 0.5 sentinel guard costs nothing. The knee-shape cluster"
-        " (kp, kcap, m, nd, vk, lam) is strongly entangled: the shape is pinned,"
-        " the mechanism split is not (see st8l65_nd_probe.txt)."
+        f"\nSuperseded reference (9-param, nd=0, scripts/fit_st8l65.py):"
+        " full 9.97 % | no-Vgs5 5.54 %."
+        f"\nnd: fit A {res_a.params.nd:.4g} | fit B {res_b.params.nd:.4g}"
+        f" (bounds {BOUNDS['nd']}). Interior (not on_bounds) = the data wants a"
+        " knee far softer than the legacy tanh (nd = 2.8) and softer than the"
+        " old 0.5 guard allowed."
+        f"\nStill riding a bound -- fit A: {pinned(res_a)}"
+        f" | fit B: {pinned(res_b)}. Rank, cond and the knee-shape cluster"
+        " correlations (kp, kcap, m, nd, vk, lam) are in st8l65_nd_probe.txt:"
+        " the shape is pinned, the mechanism split is not."
         "\nrd+rs is expected to sit BELOW the measured Rds(on) chord (34.5 mOhm):"
         " only the SUM is identifiable (rd <-> rs ~ -0.999)."
         "\nksub is anchored by the single Vgs(th) point (3.7 V, 250 uA) via the"
@@ -322,9 +399,11 @@ def main() -> None:
     probe_file.write_text("\n\n".join(probe) + "\n")
     print(f"wrote {probe_file}")
 
-    fits = {"official_B": OFFICIAL["params"], "nd_B": res_b.params}
-    plot(data, fits, OUT / "st8l65_nd_fit.png")
-    plot_per_curve(data, fits, OUT / "st8l65_nd_percurve.png")
+    plot(data, {"official_A": OFFICIAL["params"], "nd_B": res_b.params},
+         OUT / "st8l65_nd_fit.png")
+    # Per-curve comparison: nd fit A vs nd fit B (official fit B NOT plotted).
+    plot_per_curve(data, {"nd_A": res_a.params, "nd_B": res_b.params},
+                   OUT / "st8l65_nd_percurve.png")
 
     # Plain overlay via plotting.overlay_data (combined family plot).
     fig, ax = plt.subplots(figsize=(8, 5.5))

@@ -6,13 +6,7 @@ expression**, plus least-squares parameter extraction from static I-V data.
 
 ## Why
 
-> **Level-1 is C1 continuous for any mtriode.** LTspice places the
-> triode/saturation knee at `Vds = Vov / mtriode` so the triode slope
-> `m·Kp·(Vov − m·Vds)` vanishes exactly where saturation begins. (An early
-> version of this project reported a −40 S NDR dip and a gds jump at the knee;
-> that was a bug in its own reference formula, since corrected and pinned by
-> `tests/test_model.py::test_level1_is_c1_continuous`.) Verified against
-> LTspice 26.0.1 `.meas` at Vgs = 5 V, Vto = 3 V, Kp = 2, Lambda = 0:
+LTspice's VDMOS model:
 
 | mtriode | knee = Vov/m | Ron conductance = m·Kp·Vov | Id,sat |
 |---|---|---|---|
@@ -154,7 +148,7 @@ the channel-only model is singular in reverse until the body diode exists.
 
 ## Project status
 
-Eight sessions, all committed to `main`. The package provides one C¹ continuous
+Ten sessions, all committed to `main`. The package provides one C¹ continuous
 drain-current model (softplus subthreshold, gate-charge cap kcap/m, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
 package rd/rs, plus bounded least-squares extraction with identifiability
@@ -163,8 +157,11 @@ bound's magnitude, not the box width). Two mechanisms were added and then
 deleted as unsupported by the data: `kappa` (a voltage divider posing as a
 package resistance) and a `gds·Vds` leak (a one-point parameter that flattened
 the subthreshold curve) — the off state is now the gate-dependent softplus
-floor. Current fit on ST8L65N044M9: **5.54 % relative RMSE (fit B), Jacobian
-rank 9/9, cond 3.75e4**, 89 tests green. Remaining gaps: Q(V), body diode +
+floor. Current **official** fit on ST8L65N044M9: **3.79 % relative RMSE
+(fit A, 10-param with `nd` free, full 41-point set), Jacobian rank 8/10,
+cond 2.19e3**, 103 tests green. `lam`/`vk` report σ = inf because the data
+stops at Vds = 20 V and carries no deep-saturation information — expected,
+not a fit failure. Remaining gaps: Q(V), body diode +
 HV leakage, thermal node, LTspice export — details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
@@ -194,7 +191,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 89 tests green (digitizer Tk window tests self-skip headless)
+pytest                            # 103 tests green (digitizer Tk window tests self-skip headless)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
@@ -313,7 +310,10 @@ at 1.0 in float) and decays smoothly to zero below.
   `scripts/fit_st8l65.py`). Adding them to the default set would silently
   change every existing fit and anchor. Same rationale for `nd`: 0 is the
   legacy tanh, it is fitted in linear space (0 cannot be logged), and its
-  lower bound 0.5 keeps a free `nd` away from the sentinel.
+  lower bound 0.1 keeps a free `nd` away from the sentinel. The floor was
+  relaxed 0.5 → 0.1 when the ST8L65 optimum landed at nd ≈ 0.47, below the old
+  guard: the data wants a knee softer than 0.5 allows. Do not relax it further
+  — nd → 0 collapses the drain current.
 - `vov_floor` is a numerical floor on Vk — keep fixed, never fitted.
 
 ### Fitter diagnostics

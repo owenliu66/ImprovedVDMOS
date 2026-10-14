@@ -109,7 +109,7 @@ LOG_PARAMS: frozenset[str] = frozenset(
 # Rationale for the non-obvious entries: README, "Bounds and fitting-space
 # decisions".
 BOUNDS: dict[str, tuple[float, float]] = {
-    "kp": (1e-3, 1e3),
+    "kp": (1e-2, 1e4),
     "vth0": (0.0, 10.0),
     "ksub": (5e-3, 1.0),
     # Linear space; lower bound deliberately well above 0 (a free kcap must
@@ -117,17 +117,20 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "kcap": (0.05, 100.0),
     "m": (0.5, 40.0),
     "theta": (1e-4, 5.0),
-    "vsat": (0.05, 100.0),
+    "vsat": (0.05, 10000.0),
     # Linear space; lower bound above 0 for the same reason as kcap -- a free
-    # nd must never enter the 0..0.5 region where the sentinel 0 ("legacy
-    # tanh") and a fitted value are numerically indistinguishable.
-    "nd": (0.5, 40.0),
+    # nd must never enter the region near the sentinel 0 ("legacy tanh")
+    # where a fitted value and the sentinel are numerically indistinguishable.
+    # Relaxed 0.5 -> 0.1 (session 10): the fit-B relaxed-bound probe landed
+    # at nd = 0.47, just under the old guard, so the data wants a knee softer
+    # than the old floor allowed.
+    "nd": (0.1, 40.0),
     "eta": (1e-5, 1.0),
-    "lam": (1e-6, 5.0),
+    "lam": (1e-12, 1.0),
     "gk": (1e-12, 100.0),
     "vthk": (-5.0, 10.0),
     "kk": (1e-3, 5.0),
-    "vk": (0.1, 200.0),
+    "vk": (0.1, 1300.0),
     "vov_floor": (1e-6, 1e-1),
     # Linear space (the physical answer can be exactly zero); 0.5 Ohm is a
     # loose global ceiling only -- per device cap at datasheet Rds(on).

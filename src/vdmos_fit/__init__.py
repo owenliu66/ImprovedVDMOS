@@ -21,6 +21,11 @@ from .params import (
     unpack,
     vector_bounds,
 )
+from .reference import (
+    ST8L65_FIT_A_FREE,
+    ST8L65_OFFICIAL,
+    ST8L65_OFFICIAL_RMSE_REL,
+)
 
 __version__ = "0.1.0"
 
@@ -33,6 +38,9 @@ __all__ = [
     "Identifiability",
     "LOG_PARAMS",
     "Params",
+    "ST8L65_FIT_A_FREE",
+    "ST8L65_OFFICIAL",
+    "ST8L65_OFFICIAL_RMSE_REL",
     "example_dataset",
     "fit",
     "identifiability",
