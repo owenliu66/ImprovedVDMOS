@@ -88,19 +88,12 @@ fit fails the suite. Suite is now **103 tests green**, ruff clean.
 
 ## Queue
 
-1. Digitise a near-threshold transfer curve to pin the real subthreshold
-   swing — now the TOP priority: the official fit put ksub at 0.243 V
-   (~560 mV/dec), an obvious one-point-anchor artifact.
-2. α/β ladders vs the official fit A (β ladder should now be too shallow at
-   high Vgs — recheck against the new fit).
-3. Knee-shape check vs Figure 3 — visual check done (out/st8l65_nd_percurve.png);
-   formal digitisation of Figure 3 would quantify it.
-4. Knee-cluster identifiability: the shape is pinned but the kp/kcap/m/nd/vk/lam
+1. Knee-cluster identifiability: the shape is pinned but the kp/kcap/m/nd/vk/lam
    split is not (rank 8/10, |corr| up to 0.999). Dense knee-region data
    (Vds 0.5–8 V, fine Vgs steps) is what would break it.
-5. Body diode / reverse polarity + HV leakage — biggest model hole; the
+2. Body diode / reverse polarity + HV leakage — biggest model hole; the
    package-R path is Vds ≥ 0 only.
-6. Then the architecture: Q(V), Tj node, LTspice export, CI.
+3. Then the architecture: Q(V), Tj node, LTspice export, CI.
 
 `.vscode/` remains untracked (user's call). `out/` is gitignored; new
 contents are the nd run (`st8l65_nd_*`) plus `_nd_fit_run.log`.
