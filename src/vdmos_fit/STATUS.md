@@ -1,11 +1,15 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-13 (session 10). Companion to [README.md](../../README.md).*
+*Snapshot: 2026-10-16 (session 11 — parameter rename to the type-prefix
+naming convention; model bit-identical). Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Ten sessions, all committed to `main` (session 9 added the drain-knee softness
-exponent `k_kneesharp`; session 10 re-fitted ST8L65 with it — see the k_kneesharp section below).
+Eleven sessions, all committed to `main` (session 9 added the drain-knee softness
+exponent `k_kneesharp`; session 10 re-fitted ST8L65 with it — see the k_kneesharp section below;
+session 11 renamed every parameter to the `<type prefix>_<suffix>` convention —
+names.xlsx + README "Naming convention" are the mapping, tag `pre-rename-2026-10`
+is the escape hatch, and the rename is bit-identical).
 The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (v_ovmax, k_ovsharp),
 mobility degradation via v_knee, velocity saturation, bounded DIBL, gated CLM,
