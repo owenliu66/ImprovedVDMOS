@@ -5,7 +5,7 @@ Measured or digitised I-V data, one CSV per device/condition.
 ## Format
 
 ```csv
-vgs,vds,ids
+v_gs,v_ds,i_d
 4.0,0.05,0.812
 4.0,1.0,15.3
 ...
@@ -30,14 +30,14 @@ Record the source (datasheet rev, figure number, temperature) in a sidecar
 
 ## What to capture (in priority order)
 
-1. **Transfer curves** Id(Vgs) at several Vds, including the low-Vds ohmic line
-   → fixes kp, vth0, theta.
-2. **Rds(on) vs Vgs** spec table → the strongest constraint on Ron; fit with
+1. **Transfer curves** i_d(v_gs) at several v_ds, including the low-v_ds ohmic line
+   → fixes k_p, v_th0, k_theta.
+2. **Rds(on) vs v_gs** spec table → the strongest constraint on Ron; fit with
    `--weight abs` on these points.
-3. **Output curves** Id(Vds) at several Vgs → fixes vsat, lam, eta.
-4. **Off-state / subthreshold** Id(Vds) at Vgs = 0 → fixes the subthreshold
-   floor (ksub, vth0).
-5. **Kink region** (trench parts): dense Vgs spacing near the kink onset → gk, vthk, kk.
+3. **Output curves** i_d(v_ds) at several v_gs → fixes v_vsat, k_lambda, k_eta.
+4. **Off-state / subthreshold** i_d(v_ds) at v_gs = 0 → fixes the subthreshold
+   floor (v_sub, v_th0).
+5. **Kink region** (trench parts): dense v_gs spacing near the kink onset → g_k, v_thk, v_kovsoft.
 
 Static data cannot identify capacitance or switching parameters — those come
 from Q(V) and double-pulse Eon/Eoff, handled separately.
@@ -52,26 +52,26 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   (Figure 3, 25 °C, pulsed measurement) plus spec-table anchor points. No
   `.meta.txt` sidecar — this entry is the provenance record.
 - **Figure 3 on disk:** `ST8L65N044M9_Id_Vds_Vgs.png` — the datasheet's full
-  typical output curves (Vgs = 5, 6, 7, 8, 9, 10 V; Vds 0–19 V; Id up to
+  typical output curves (v_gs = 5, 6, 7, 8, 9, 10 V; v_ds 0–19 V; i_d up to
   ~240 A; print code GPDP160620251503OCH). Use it for the knee-shape check
   of the fitted curves.
-- **Contents:** 41 points, header `index,vds,ids,vgs` (`load_csv` matches
+- **Contents:** 41 points, header `index,v_ds,i_d,v_gs` (`load_csv` matches
   columns by header, so order/extras don't matter). Seven gate curves:
-  Vgs = 3.7, 5, 6, 7, 8, 9, 10 V; Vds range 0–20 V.
-- **Spec anchors included:** the Vgs(th) point (Vgs = Vds = 3.7 V,
-  Id = 250 µA) — the only off-state point, anchoring ksub/vth0 through the
+  v_gs = 3.7, 5, 6, 7, 8, 9, 10 V; v_ds range 0–20 V.
+- **Spec anchors included:** the v_gs(th) point (v_gs = v_ds = 3.7 V,
+  i_d = 250 µA) — the only off-state point, anchoring v_sub/v_th0 through the
   subthreshold channel — and the
-  Rds(on) points at Vgs = 10 V (0.483 V/14 A, 1 V/29 A, 1.26 V/35 A →
+  Rds(on) points at v_gs = 10 V (0.483 V/14 A, 1 V/29 A, 1.26 V/35 A →
   34.5–36 mΩ chord).
-- **Real-data oddity kept, not cleaned:** the Vgs = 5 curve has two points
-  with identical Id ≈ 3.937 A at Vds = 1.127 and 5.153 V. Genuine datasheet
+- **Real-data oddity kept, not cleaned:** the v_gs = 5 curve has two points
+  with identical i_d ≈ 3.937 A at v_ds = 1.127 and 5.153 V. Genuine datasheet
   data, but no C¹ model can reproduce it (β = 0 over a 4.6× voltage interval,
   then β ≈ 0.12); `scripts/fit_st8l65.py` reports fits with and without that
   curve (fit A / fit B).
-- **Removed point:** (Vgs = 0, Vds = 650 V, Id = 1 µA) was digitised but
+- **Removed point:** (v_gs = 0, v_ds = 650 V, i_d = 1 µA) was digitised but
   removed — the channel model has no high-voltage leakage element yet, and no
   single conductance could give both 1 µA at 650 V (1.5 nS) and 250 µA at
   3.7 V (68 µS) anyway. Real HV leakage waits for the body diode / a
   dedicated leakage element.
-- **No Rds(on)-vs-Vgs curve exists in this datasheet** (checked); the
-  rd/rs-vs-channel split stays weakly identified without it.
+- **No Rds(on)-vs-v_gs curve exists in this datasheet** (checked); the
+  r_d/r_s-vs-channel split stays weakly identified without it.

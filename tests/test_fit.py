@@ -22,21 +22,21 @@ from vdmos_fit import (
 )
 
 TRUTH = Params(
-    kp=30.0, vth0=3.1, theta=0.02, vsat=1.2, eta=0.03, lam=0.015, gk=0.3, vthk=1.5
+    k_p=30.0, v_th0=3.1, k_theta=0.02, v_vsat=1.2, k_eta=0.03, k_lambda=0.015, g_k=0.3, v_thk=1.5
 )
 
 
 @pytest.fixture(scope="module")
 def synthetic():
-    vgs = np.linspace(2.0, 14.0, 25)
-    vds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
-    return make_synthetic(TRUTH, vgs, vds, noise=0.005, seed=3)
+    v_gs = np.linspace(2.0, 14.0, 25)
+    v_ds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
+    return make_synthetic(TRUTH, v_gs, v_ds, noise=0.005, seed=3)
 
 
 def test_fit_recovers_synthetic_parameters(synthetic):
     """Noiseless-ish synthetic data must round-trip back to the truth.
 
-    Only the strongly-sensed parameters are checked tightly; theta and vthk are
+    Only the strongly-sensed parameters are checked tightly; k_theta and v_thk are
     weakly identified from this grid (see the identifiability tests) and are
     deliberately not asserted here.
     """
@@ -44,7 +44,7 @@ def test_fit_recovers_synthetic_parameters(synthetic):
     assert res.success
     assert res.rmse_rel < 0.02
     got, want = res.params.as_dict(), TRUTH.as_dict()
-    for name in ("kp", "vth0", "vsat", "eta", "lam", "gk"):
+    for name in ("k_p", "v_th0", "v_vsat", "k_eta", "k_lambda", "g_k"):
         assert got[name] == pytest.approx(want[name], rel=0.2), name
 
 
@@ -53,8 +53,8 @@ def test_fit_improves_on_default_start(synthetic):
     start_err = np.sqrt(
         np.mean(
             (
-                (vdmos_id(synthetic.vds, synthetic.vgs, DEFAULT) - synthetic.ids)
-                / np.maximum(np.abs(synthetic.ids), 1e-3)
+                (vdmos_id(synthetic.v_ds, synthetic.v_gs, DEFAULT) - synthetic.i_d)
+                / np.maximum(np.abs(synthetic.i_d), 1e-3)
             )
             ** 2
         )
@@ -64,43 +64,43 @@ def test_fit_improves_on_default_start(synthetic):
 
 def test_bounds_are_respected(synthetic):
     """A deliberately absurd start must still land inside physical bounds."""
-    bad = DEFAULT.replace(kp=1e-4, theta=1e-4, vsat=1e-3)
+    bad = DEFAULT.replace(k_p=1e-4, k_theta=1e-4, v_vsat=1e-3)
     res = fit(synthetic, start=bad)
-    assert res.params.kp > 0 and res.params.vsat > 0 and res.params.theta > 0
+    assert res.params.k_p > 0 and res.params.v_vsat > 0 and res.params.k_theta > 0
 
 
 def test_fixed_parameters_stay_fixed(synthetic):
-    """Fitting only kp/vth0 must not move theta."""
-    res = fit(synthetic, start=DEFAULT, free=("kp", "vth0"))
-    assert res.params.theta == DEFAULT.theta
-    assert res.params.vsat == DEFAULT.vsat
+    """Fitting only k_p/v_th0 must not move k_theta."""
+    res = fit(synthetic, start=DEFAULT, free=("k_p", "v_th0"))
+    assert res.params.k_theta == DEFAULT.k_theta
+    assert res.params.v_vsat == DEFAULT.v_vsat
 
 
 def test_uncertainty_report_shape(synthetic):
     res = fit(synthetic)
     unc = parameter_uncertainty(res)
     assert set(unc) == set(
-        ("kp", "vth0", "theta", "vsat", "eta", "lam", "gk", "vthk", "rd", "rs")
+        ("k_p", "v_th0", "k_theta", "v_vsat", "k_eta", "k_lambda", "g_k", "v_thk", "r_d", "r_s")
     )
     assert all(v >= 0 for v in unc.values())
 
 
 def test_kink_parameters_are_weakly_determined(synthetic):
-    """The kink onset is barely sampled by this grid, so vthk is poorly determined.
+    """The kink onset is barely sampled by this grid, so v_thk is poorly determined.
 
-    vthk = 1.5 V with kk = 0.1 V means the kink sigmoid is essentially saturated
-    (=1) for every Vgs >= 2 V in this grid, so only the very lowest curves carry
+    v_thk = 1.5 V with v_kovsoft = 0.1 V means the kink sigmoid is essentially saturated
+    (=1) for every v_gs >= 2 V in this grid, so only the very lowest curves carry
     information about it. The fit lands at ~1.7 V against a truth of 1.5 V -- a
     16 % error -- and the report must show a correspondingly huge sigma rather
-    than hiding it. Fix vthk from a measurement, or add dense Vgs points through
+    than hiding it. Fix v_thk from a measurement, or add dense v_gs points through
     the kink region, before trusting it.
     """
     ident = identifiability(fit(synthetic))
-    assert ident.sigma_rel["vthk"] > 1.0  # order-unity or worse
-    assert ident.sigma_rel["kp"] < 1.0  # core shape params are fine
+    assert ident.sigma_rel["v_thk"] > 1.0  # order-unity or worse
+    assert ident.sigma_rel["k_p"] < 1.0  # core shape params are fine
     assert ident.rank == ident.n_free  # not degenerate, just weak
-    # Threshold raised 1e4 -> 1e5 (2026, package-R change): with rd/rs free and
-    # truth rd = rs = 0, the rd <-> rs columns are near-parallel (corr -0.999,
+    # Threshold raised 1e4 -> 1e5 (2026, package-R change): with r_d/r_s free and
+    # truth r_d = r_s = 0, the r_d <-> r_s columns are near-parallel (corr -0.999,
     # only the sum is sensed), which alone pushes cond to ~1.4e4.
     assert ident.cond < 1e5
 
@@ -108,35 +108,35 @@ def test_kink_parameters_are_weakly_determined(synthetic):
 def test_sensitivity_report_ranks_parameters(synthetic):
     """Pre-fit diagnostic must agree with the post-fit Jacobian diagnosis.
 
-    Sensitivity is measured as mean |d ln Id / d ln p|, so it is directly
+    Sensitivity is measured as mean |d ln i_d / d ln p|, so it is directly
     comparable across parameters with different units.
     """
     sens = sensitivity_report(DEFAULT, synthetic)
-    assert sens["kp"] > 0.5  # strongly sensed
-    assert sens["vthk"] < 1e-3  # ~2000x weaker than kp
-    assert sens["vthk"] < 1e-3 * sens["kp"]
+    assert sens["k_p"] > 0.5  # strongly sensed
+    assert sens["v_thk"] < 1e-3  # ~2000x weaker than k_p
+    assert sens["v_thk"] < 1e-3 * sens["k_p"]
     # weakly sensed parameters must be the ones with the biggest error bars
     ident = identifiability(fit(synthetic))
     weakest = min(sens, key=sens.get)
-    assert ident.sigma_rel[weakest] > ident.sigma_rel["vth0"]
+    assert ident.sigma_rel[weakest] > ident.sigma_rel["v_th0"]
 
 
 def test_theta_vsat_correlation_is_reported(synthetic):
-    """theta and vsat both flatten the knee; output curves alone cannot separate
+    """k_theta and v_vsat both flatten the knee; output curves alone cannot separate
     them, so the report must surface the pairing.
 
-    Evaluated with the classic 9-parameter free set: once rd/rs join the fit,
+    Evaluated with the classic 9-parameter free set: once r_d/r_s join the fit,
     the knee-flattening trade-off redistributes across more parameters and the
-    single theta<->vsat pair drops below the 0.8 reporting threshold (their
+    single k_theta<->v_vsat pair drops below the 0.8 reporting threshold (their
     individual sigmas stay order-unity or worse -- see
     tests/test_package_r.py::test_fit_recovers_package_resistance).
     """
-    legacy_free = ("kp", "vth0", "theta", "vsat", "eta", "lam", "gk", "vthk")
+    legacy_free = ("k_p", "v_th0", "k_theta", "v_vsat", "k_eta", "k_lambda", "g_k", "v_thk")
     ident = identifiability(fit(synthetic, free=legacy_free), legacy_free)
     pairs = {(a, b) for a, b, _ in ident.worst_pairs}
-    assert ("theta", "vsat") in pairs
+    assert ("k_theta", "v_vsat") in pairs
     # and both carry large individual error bars as a consequence
-    assert ident.sigma_rel["theta"] > 1.0
+    assert ident.sigma_rel["k_theta"] > 1.0
 
 
 def test_dead_parameter_reports_inf_not_a_small_sigma():
@@ -146,36 +146,36 @@ def test_dead_parameter_reports_inf_not_a_small_sigma():
     pinv(J.T @ J) returns *zero* variance for a near-zero Jacobian column,
     which reads as "perfectly determined" when the truth is the exact
     opposite. Reproduced synthetically on the ST8L65 situation: a dataset
-    whose lowest Vgs is 8 V (vth0 = 3.1) contains no subthreshold points, so
-    ksub carries essentially no information -- its column measures ~1e-9 of
-    the largest column, and pinning ksub at 0.30 V leaves the fit at the same
+    whose lowest v_gs is 8 V (v_th0 = 3.1) contains no subthreshold points, so
+    v_sub carries essentially no information -- its column measures ~1e-9 of
+    the largest column, and pinning v_sub at 0.30 V leaves the fit at the same
     optimum. The old absolute 1e-10 * max tolerance classified that column
     LIVE and reported a confident small sigma; the relative 1e-5 tolerance
-    classifies it dead. eta (sigma ~ 12, genuinely sensed but weak) stays
+    classifies it dead. k_eta (sigma ~ 12, genuinely sensed but weak) stays
     live, so the tolerance does not over-trigger.
     """
-    truth = Params(kp=30.0, vth0=3.1, ksub=0.05, theta=0.02, vsat=1.2,
-                   eta=0.03, lam=0.015, gk=0.0)
-    vgs = np.linspace(8.0, 14.0, 25)
-    vds = np.array([0.5, 2.0, 5.0, 10.0, 20.0])
-    data = make_synthetic(truth, vgs, vds, noise=0.0, seed=0)
-    free = ("kp", "vth0", "ksub", "theta", "vsat", "eta", "lam")
+    truth = Params(k_p=30.0, v_th0=3.1, v_sub=0.05, k_theta=0.02, v_vsat=1.2,
+                   k_eta=0.03, k_lambda=0.015, g_k=0.0)
+    v_gs = np.linspace(8.0, 14.0, 25)
+    v_ds = np.array([0.5, 2.0, 5.0, 10.0, 20.0])
+    data = make_synthetic(truth, v_gs, v_ds, noise=0.0, seed=0)
+    free = ("k_p", "v_th0", "v_sub", "k_theta", "v_vsat", "k_eta", "k_lambda")
 
     ident = identifiability(fit(data, start=truth, free=free), free)
-    assert math.isinf(ident.sigma_rel["ksub"])
-    assert ident.unidentifiable == ("ksub",)
-    # rank drops by at least the dead column; eta <-> others are also near-
+    assert math.isinf(ident.sigma_rel["v_sub"])
+    assert ident.unidentifiable == ("v_sub",)
+    # rank drops by at least the dead column; k_eta <-> others are also near-
     # degenerate on this grid, so rank is not pinned exactly.
     assert ident.rank <= len(free) - 1
     # the near-dead column must not fake a correlation with a real parameter
-    assert not any("ksub" in (a, b) for a, b, _ in ident.worst_pairs)
+    assert not any("v_sub" in (a, b) for a, b, _ in ident.worst_pairs)
     # genuinely sensed, merely weak -> must NOT be called dead
-    assert not math.isinf(ident.sigma_rel["eta"])
+    assert not math.isinf(ident.sigma_rel["k_eta"])
 
     # Independent confirmation: pinning the dead parameter cannot change the fit.
-    pinned = fit(data, start=truth.replace(ksub=0.30),
-                 free=tuple(n for n in free if n != "ksub"))
-    assert pinned.params.kp == pytest.approx(30.0, rel=1e-3)
+    pinned = fit(data, start=truth.replace(v_sub=0.30),
+                 free=tuple(n for n in free if n != "v_sub"))
+    assert pinned.params.k_p == pytest.approx(30.0, rel=1e-3)
 
 
 # ---------------------------------------------------- on_bounds pinned test
@@ -193,39 +193,39 @@ def test_on_bounds_not_flagged_well_inside_wide_box():
 
     The deleted gds bound (1e-9, 10) S had span 10 S, so the old tolerance
     rel_tol*span = 1e-2 S called any gds below 0.01 S "pinned LOWER" -- even
-    the physically meaningful 6.8e-5 S. gk inherited the same wide box (its
+    the physically meaningful 6.8e-5 S. g_k inherited the same wide box (its
     bound spans 14 decades), so it reproduces the bug exactly: 6.8e-5 S must
     read as an interior value.
     """
-    p = DEFAULT.replace(gk=6.8e-5)
-    res = _fake_fit(p, ("gk",), {"gk": (1e-12, 100.0)})
+    p = DEFAULT.replace(g_k=6.8e-5)
+    res = _fake_fit(p, ("g_k",), {"g_k": (1e-12, 100.0)})
     assert res.on_bounds() == {}
 
 
 def test_on_bounds_flags_genuinely_pinned_parameters():
     """The magnitude fix must not lose true positives.
 
-    - rs = 0 and rs = 3.8e-9 Ohm (session-6 fit A value) are numerically at
+    - r_s = 0 and r_s = 3.8e-9 Ohm (session-6 fit A value) are numerically at
       the zero lower bound -> pinned (ZERO_FLOOR makes 'at zero' decidable
       when the bound itself has no magnitude).
-    - rs = 0.66 mOhm (session-7 fit B value) is a real resistance -> free.
-    - lam = 0.004 at its device bound 0.004 1/V -> pinned UPPER (the real
+    - r_s = 0.66 mOhm (session-7 fit B value) is a real resistance -> free.
+    - k_lambda = 0.004 at its device bound 0.004 1/V -> pinned UPPER (the real
       open problem from the ST8L65 fits).
     """
     dev = (0.0, 0.036)
-    p0 = DEFAULT.replace(rs=0.0)
-    assert _fake_fit(p0, ("rs",), {"rs": dev}).on_bounds() == {"rs": "LOWER 0"}
-    p1 = DEFAULT.replace(rs=3.8e-9)
-    assert _fake_fit(p1, ("rs",), {"rs": dev}).on_bounds() == {"rs": "LOWER 0"}
-    p2 = DEFAULT.replace(rs=0.66e-3)
-    assert _fake_fit(p2, ("rs",), {"rs": dev}).on_bounds() == {}
-    p3 = DEFAULT.replace(lam=0.004)
-    assert _fake_fit(p3, ("lam",), {"lam": (1e-6, 0.004)}).on_bounds() == {
-        "lam": "UPPER 0.004"
+    p0 = DEFAULT.replace(r_s=0.0)
+    assert _fake_fit(p0, ("r_s",), {"r_s": dev}).on_bounds() == {"r_s": "LOWER 0"}
+    p1 = DEFAULT.replace(r_s=3.8e-9)
+    assert _fake_fit(p1, ("r_s",), {"r_s": dev}).on_bounds() == {"r_s": "LOWER 0"}
+    p2 = DEFAULT.replace(r_s=0.66e-3)
+    assert _fake_fit(p2, ("r_s",), {"r_s": dev}).on_bounds() == {}
+    p3 = DEFAULT.replace(k_lambda=0.004)
+    assert _fake_fit(p3, ("k_lambda",), {"k_lambda": (1e-6, 0.004)}).on_bounds() == {
+        "k_lambda": "UPPER 0.004"
     }
     # just below the bound is NOT pinned: 0.0039 is an interior optimum
-    p4 = DEFAULT.replace(lam=0.0039)
-    assert _fake_fit(p4, ("lam",), {"lam": (1e-6, 0.004)}).on_bounds() == {}
+    p4 = DEFAULT.replace(k_lambda=0.0039)
+    assert _fake_fit(p4, ("k_lambda",), {"k_lambda": (1e-6, 0.004)}).on_bounds() == {}
 
 
 def test_curveset_validation():
@@ -236,5 +236,5 @@ def test_curveset_validation():
 def test_example_dataset_is_usable():
     d = example_dataset()
     assert len(d) == 25 * 8
-    assert len(d.vgs_grid()) == 25
-    assert len(d.vds_grid()) == 8
+    assert len(d.v_gs_grid()) == 25
+    assert len(d.v_ds_grid()) == 8

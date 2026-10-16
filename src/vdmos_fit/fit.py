@@ -25,7 +25,7 @@ __all__ = [
 
 
 # "At zero" floor for the on_bounds test (parameters whose bound is 0, like
-# rd/rs, count as pinned below rel_tol * ZERO_FLOOR); rationale in README,
+# r_d/r_s, count as pinned below rel_tol * ZERO_FLOOR); rationale in README,
 # "Fitter diagnostics".
 ZERO_FLOOR = 1e-5
 
@@ -74,7 +74,7 @@ class FitResult:
         pinned = self.on_bounds()
         for name, val in self.params.as_dict().items():
             tag = f"   <-- pinned at {pinned[name]}" if name in pinned else ""
-            lines.append(f"  {name:<10s} = {val:.6g}{tag}")
+            lines.append(f"  {name:<12s} = {val:.6g}{tag}")
         return "\n".join(lines)
 
 
@@ -84,21 +84,21 @@ def residuals(
     data: CurveSet,
     base: Params = DEFAULT,
     *,
-    id_floor: float = 1e-3,
+    i_d_floor: float = 1e-3,
     weight: str = "relative",
 ) -> np.ndarray:
     """Residual vector for `least_squares`.
 
-    weight = "relative" : (Im - Is)/max(|Is|, id_floor)  -> log-ish, treats
+    weight = "relative" : (Im - Is)/max(|Is|, i_d_floor)  -> log-ish, treats
         subthreshold and high-current points as equally important.
     weight = "abs"      : Amperes; dominated by the high-current corner, which
         is what a Ron/Rds(on) spec cares about.
     """
     p = unpack(x, free, base)
-    model = vdmos_id(data.vds, data.vgs, p)
-    err = model - data.ids
+    model = vdmos_id(data.v_ds, data.v_gs, p)
+    err = model - data.i_d
     if weight == "relative":
-        err = err / np.maximum(np.abs(data.ids), id_floor)
+        err = err / np.maximum(np.abs(data.i_d), i_d_floor)
     elif weight != "abs":
         raise ValueError(f"unknown weight {weight!r}")
     return err
@@ -118,7 +118,7 @@ def fit(
 
     Positive parameters are optimised in log space with physical bounds, which
     keeps the trust-region solver from wandering through non-physical regions
-    (negative kp, zero ksub) where the model becomes singular. Pass
+    (negative k_p, zero v_sub) where the model becomes singular. Pass
     `bounds_overrides` to widen individual bounds for an exploratory fit; the
     result records them so `FitResult.on_bounds()` can flag pinned parameters.
     """
@@ -270,16 +270,16 @@ def sensitivity_report(
     *,
     rel_step: float = 1e-3,
 ) -> dict[str, float]:
-    """Mean |d ln Id / d ln p| over the dataset, evaluated before fitting.
+    """Mean |d ln i_d / d ln p| over the dataset, evaluated before fitting.
 
     Cheap diagnostic for deciding what to fit at all: a parameter whose
-    current value changes Id by <1e-3 relative across the whole data range
+    current value changes i_d by <1e-3 relative across the whole data range
     cannot be extracted from it. Parameters sitting at a zero lower bound
-    (rd, rs at 0) get a one-sided absolute probe of size `rel_step` -- the
+    (r_d, r_s at 0) get a one-sided absolute probe of size `rel_step` -- the
     log-space formula is meaningless at p = 0 and a two-sided probe would
     request negative resistance.
     """
-    base = vdmos_id(data.vds, data.vgs, params)
+    base = vdmos_id(data.v_ds, data.v_gs, params)
     scale = np.maximum(np.abs(base), 1e-12)
     out: dict[str, float] = {}
     for name in free:
@@ -287,12 +287,12 @@ def sensitivity_report(
         lo_b = BOUNDS.get(name, (-np.inf, np.inf))[0]
         if abs(p0) > 1e-12 and p0 - rel_step * abs(p0) >= lo_b:
             step = rel_step * abs(p0)
-            up = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 + step}))
-            dn = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 - step}))
+            up = vdmos_id(data.v_ds, data.v_gs, params.replace(**{name: p0 + step}))
+            dn = vdmos_id(data.v_ds, data.v_gs, params.replace(**{name: p0 - step}))
             sens = np.abs(up - dn) / (2.0 * step) / scale * abs(p0)
         else:
             step = rel_step
-            up = vdmos_id(data.vds, data.vgs, params.replace(**{name: p0 + step}))
+            up = vdmos_id(data.v_ds, data.v_gs, params.replace(**{name: p0 + step}))
             sens = np.abs(up - base) / step / scale
         out[name] = float(np.mean(sens))
     return out

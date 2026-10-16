@@ -13,47 +13,58 @@ from .params import Params
 
 __all__ = ["CurveSet", "load_csv", "save_csv", "make_synthetic", "example_dataset"]
 
+# On-disk column names are an EXTERNAL contract (the curve digitizer exports
+# them and the digitised datasheet CSVs already use them), so they keep the
+# old SPICE-style spelling even though the in-code attributes follow the
+# model naming convention. See README, "Naming convention".
+_CSV_COLUMNS: tuple[str, ...] = ("v_gs", "v_ds", "i_d")
+_CSV_HEADERS: dict[str, str] = {"v_gs": "vgs", "v_ds": "vds", "i_d": "ids"}
+
 
 @dataclass(frozen=True)
 class CurveSet:
-    """Flat arrays of (Vgs, Vds, Id) triplets -- one row per measured point.
+    """Flat arrays of (v_gs, v_ds, i_d) triplets -- one row per measured point.
 
     Flat form (rather than 2-D grids) is deliberate: datasheet curves digitised
     from graphs are ragged, and different curves can have different lengths.
     """
 
-    vgs: np.ndarray
-    vds: np.ndarray
-    ids: np.ndarray
+    v_gs: np.ndarray
+    v_ds: np.ndarray
+    i_d: np.ndarray
     label: str = ""
 
     def __post_init__(self) -> None:
-        n = len(self.vgs)
-        if not (len(self.vds) == len(self.ids) == n):
-            raise ValueError("vgs, vds and ids must have the same length")
+        n = len(self.v_gs)
+        if not (len(self.v_ds) == len(self.i_d) == n):
+            raise ValueError("v_gs, v_ds and i_d must have the same length")
 
     def __len__(self) -> int:
-        return len(self.vgs)
+        return len(self.v_gs)
 
     def subset(self, mask: np.ndarray) -> CurveSet:
-        return CurveSet(self.vgs[mask], self.vds[mask], self.ids[mask], self.label)
+        return CurveSet(self.v_gs[mask], self.v_ds[mask], self.i_d[mask], self.label)
 
-    def vgs_grid(self, tol: float = 1e-9) -> list[float]:
-        return sorted({round(float(v), 9) for v in self.vgs})
+    def v_gs_grid(self, tol: float = 1e-9) -> list[float]:
+        return sorted({round(float(v), 9) for v in self.v_gs})
 
-    def vds_grid(self, tol: float = 1e-9) -> list[float]:
-        return sorted({round(float(v), 9) for v in self.vds})
+    def v_ds_grid(self, tol: float = 1e-9) -> list[float]:
+        return sorted({round(float(v), 9) for v in self.v_ds})
 
 
 def load_csv(path: str | Path) -> CurveSet:
-    """Read a CSV with header `vgs,vds,ids` (column order flexible, case-insensitive)."""
+    """Read a CSV with header `vgs,vds,ids` (column order flexible, case-insensitive).
+
+    The header spellings are the legacy SPICE-style names -- see
+    :data:`_CSV_COLUMNS`.
+    """
     path = Path(path)
     with path.open(newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     if not rows:
         raise ValueError(f"{path} has no data rows")
     cols = {k.strip().lower(): k for k in rows[0] if k}
-    for need in ("vgs", "vds", "ids"):
+    for need in _CSV_HEADERS.values():
         if need not in cols:
             raise ValueError(f"{path} missing column '{need}'; header is {list(rows[0])}")
     get = lambda r, c: float(r[cols[c]])  # noqa: E731
@@ -70,45 +81,47 @@ def save_csv(data: CurveSet, path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["vgs", "vds", "ids"])
-        w.writerows(zip(data.vgs, data.vds, data.ids, strict=True))
+        w.writerow([_CSV_HEADERS[c] for c in _CSV_COLUMNS])
+        w.writerows(zip(data.v_gs, data.v_ds, data.i_d, strict=True))
 
 
 def make_synthetic(
     truth: Params,
-    vgs_vals: np.ndarray,
-    vds_vals: np.ndarray,
+    v_gs_vals: np.ndarray,
+    v_ds_vals: np.ndarray,
     *,
     noise: float = 0.01,
     seed: int = 0,
 ) -> CurveSet:
-    """Full grid of (Vgs, Vds) points from `truth`, with multiplicative noise.
+    """Full grid of (v_gs, v_ds) points from `truth`, with multiplicative noise.
 
     Noise is multiplicative and applied *without* clipping: near-zero currents
-    are handled in the residual denominator (`id_floor` in
+    are handled in the residual denominator (`i_d_floor` in
     :func:`vdmos_fit.fit.residuals`), not in the data -- rationale in README,
     "Synthetic data". Used to verify the fitter recovers known parameters.
     """
-    vg, vd = np.meshgrid(np.asarray(vgs_vals, float), np.asarray(vds_vals, float), indexing="ij")
+    vg, vd = np.meshgrid(
+        np.asarray(v_gs_vals, float), np.asarray(v_ds_vals, float), indexing="ij"
+    )
     vg, vd = vg.ravel(), vd.ravel()
-    ids = vdmos_id(vd, vg, truth)
+    i_d = vdmos_id(vd, vg, truth)
     rng = np.random.default_rng(seed)
-    ids = ids * (1.0 + noise * rng.standard_normal(ids.size))
-    return CurveSet(vg, vd, ids, label="synthetic")
+    i_d = i_d * (1.0 + noise * rng.standard_normal(i_d.size))
+    return CurveSet(vg, vd, i_d, label="synthetic")
 
 
 def example_dataset(noise: float = 0.01, seed: int = 1) -> CurveSet:
-    """Typical power-FET static grid: transfer curves at several Vds plus output curves."""
-    vgs = np.linspace(2.0, 14.0, 25)
-    vds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
+    """Typical power-FET static grid: transfer curves at several v_ds plus output curves."""
+    v_gs = np.linspace(2.0, 14.0, 25)
+    v_ds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
     truth = Params(
-        kp=30.0,
-        vth0=3.1,
-        theta=0.02,
-        vsat=1.2,
-        eta=0.03,
-        lam=0.015,
-        gk=0.3,
-        vthk=1.5,
+        k_p=30.0,
+        v_th0=3.1,
+        k_theta=0.02,
+        v_vsat=1.2,
+        k_eta=0.03,
+        k_lambda=0.015,
+        g_k=0.3,
+        v_thk=1.5,
     )
-    return make_synthetic(truth, vgs, vds, noise=noise, seed=seed)
+    return make_synthetic(truth, v_gs, v_ds, noise=noise, seed=seed)

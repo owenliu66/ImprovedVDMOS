@@ -33,7 +33,7 @@ def main(csv_path: str) -> int:
 
     print("\npre-fit sensitivity (what this data can actually see):")
     for k, v in sensitivity_report(DEFAULT, data).items():
-        print(f"  {k:<8s} {v:10.3g}")
+        print(f"  {k:<12s} {v:10.3g}")
     print()
     print(identifiability(stage2).summary())
 

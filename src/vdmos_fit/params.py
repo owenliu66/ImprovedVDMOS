@@ -23,69 +23,87 @@ __all__ = [
 class Params:
     """Improved VDMOS drain-current parameters.
 
-    Physical rationale for the gate cap (kcap, m) and the package resistances
-    (rd, rs) is in the project README.md ("Gate-overdrive charge cap",
-    "Package resistance"); the notes here are units and gotchas only.
+    Naming convention (README.md, "Naming convention"): ``<type prefix>_<suffix>``,
+    prefixes v_ voltage, i_ current, r_ resistance, g_ conductance, k_ factor.
+    Greek letters take the k_ prefix so no name collides with a Python keyword
+    (k_lambda for lambda); the k_ factors are unitless EXCEPT the industry-
+    standard set k_p [A/V^2], k_lambda, k_eta, k_theta [1/V]. ``db`` means drain
+    **bias**, not drain-to-body -- this model has no bulk terminal.
+
+    Physical rationale for the charge cap (v_ovmax, k_ovsharp) and the package
+    resistances (r_d, r_s) is in the project README.md ("Gate-overdrive charge
+    cap", "Package resistance"); the notes here are units and gotchas only.
 
     Attributes
     ----------
-    kp : float
+    k_p : float
         Process transconductance parameter [A/V^2]. NOTE: not the Level-1 kp
-        (28 -> ~34.7); must be re-extracted when theta/vsat are added.
-    vth0 : float   Zero-bias threshold voltage [V].
-    ksub : float   Subthreshold swing factor [V] (n*k*T/q).
-    kcap : float   Soft cap on the effective gate overdrive [V]; 0 = off.
-                   "Off" is reached by leaving kcap out of the free set --
-                   NOT by driving it to the lower bound (kcap -> 0+ means
-                   "hard cap at zero volts", the opposite of off).
-    m : float      Sharpness of the gate-overdrive cap [-]; m >> 1 approaches
-                   a hard clip at kcap. Only meaningful when kcap > 0.
-    theta : float  Mobility-degradation coefficient [1/V] -> Vk = Vov/(1+theta*Vov).
-    vsat : float   Velocity-saturation knee [V]; sets Id,sat ~ Vov**alpha, alpha < 2.
-    nd : float     Drain-knee softness exponent [-]; 0 = legacy tanh soft-switch.
-                   nd > 0 replaces v = Vk*tanh(Vds/Vk) with the SAME power-law
-                   soft-min used for the gate cap: v = Vds/(1 + (Vds/Vk)**nd)**(1/nd).
-                   Shape-only knob: dv/dVds(0) = 1 and v -> Vk hold for every nd,
-                   so Ron and the Id,sat plateau are untouched while the knee
-                   WIDTH scales with nd (nd -> inf is a hard min, nd = 1 is the
-                   harmonic soft-min; nd ~ 2.8 reproduces the legacy tanh).
-                   "Off" is the default 0 -- freeing it changes the knee shape,
-                   so it stays out of DEFAULT_FREE like kcap/m.
-    eta : float    DIBL coefficient [1/V].
-    lam : float    Channel/drift-length modulation [1/V].
-    gk : float     Trench kink (parasitic accumulation channel) conductance [S].
-                   One-sided: contributes only for Vgs above vthk.
-    vthk : float   Kink gate-onset voltage [V].
-    kk : float     Kink gate transition softness [V].
-    vk : float     Drain-bias softness [V] for the tanh() gates.
-    vov_floor : float  Numerical floor on Vk [V]; keep fixed, not fitted.
-    rd : float     Drain-side series resistance [Ohm] (bond wires, leadframe,
+        (28 -> ~34.7); must be re-extracted when k_theta/v_vsat are added.
+    v_th0 : float  Zero-bias threshold voltage [V].
+    v_sub : float  Subthreshold swing factor [V] (n*k*T/q); the softplus
+                   smoothing scale, so the deep-subthreshold slope is 1/v_sub.
+    v_ovmax : float  Soft cap (asymptotic ceiling) on the effective gate
+                   overdrive [V]; 0 = off. "Off" is reached by leaving v_ovmax
+                   out of the free set -- NOT by driving it to the lower bound
+                   (v_ovmax -> 0+ means "hard cap at zero volts", the opposite
+                   of off).
+    k_ovsharp : float  Sharpness of the overdrive cap [-]; >> 1 approaches a
+                   hard clip at v_ovmax. Only meaningful when v_ovmax > 0.
+    k_theta : float  Mobility-degradation coefficient [1/V] ->
+                   v_knee = v_ov_eff/(1 + k_theta*v_ov_eff).
+    v_vsat : float   Velocity-saturation knee [V]; sets i_d,sat ~ v_ov**alpha,
+                   alpha < 2. (The doubled v_ is deliberate: v_sat alone would
+                   read as the drain-saturation voltage, which is v_knee.)
+    k_kneesharp : float  Drain-knee softness exponent [-]; 0 = legacy tanh
+                   soft-switch. > 0 replaces v_dseff = v_knee*tanh(v_ds/v_knee)
+                   with the SAME power-law soft-min used for the charge cap:
+                   v_dseff = v_ds/(1 + (v_ds/v_knee)**k_kneesharp)**(1/k_kneesharp).
+                   Shape-only knob: dv_dseff/dv_ds(0) = 1 and v_dseff -> v_knee
+                   hold for every value, so Ron and the i_d,sat plateau are
+                   untouched while the knee WIDTH scales with it
+                   (inf is a hard min, 1 is the harmonic soft-min; ~2.8
+                   reproduces the legacy tanh). "Off" is the default 0 --
+                   freeing it changes the knee shape, so it stays out of
+                   DEFAULT_FREE like v_ovmax/k_ovsharp.
+    k_eta : float    DIBL coefficient [1/V].
+    k_lambda : float Channel/drift-length modulation [1/V]. (spelled out --
+                   ``lambda`` is a Python keyword.)
+    g_k : float      Trench kink (parasitic accumulation channel) conductance
+                   [S]. One-sided: contributes only for v_gs above v_thk.
+    v_thk : float    Kink onset voltage [V].
+    v_kovsoft : float  Kink onset softness [V] -- the transition width of the
+                   kink sigmoid, the analogue of v_sub for the subthreshold
+                   softplus. Bigger = softer.
+    v_dbsat : float  Drain-**bias** saturation voltage [V]: the scale at which
+                   the drain-bias factor k_db = tanh(v_ds/v_dbsat) saturates.
+    v_kneemin : float  Numerical floor on v_knee [V]; keep fixed, not fitted.
+    r_d : float      Drain-side series resistance [Ohm] (bond wires, leadframe,
                    pins, plus the undepleted drift). Embedded outside the
                    intrinsic channel; datasheet Rds(on) already contains
-                   rd + rs, and rd + rs is a LOWER bound on the Rds(on)
-                   chord (see README, "Package resistance (rd, rs)").
-    rs : float     Source series resistance [Ohm]. Also *degenerates* the
+                   r_d + r_s, and r_d + r_s is a LOWER bound on the Rds(on)
+                   chord (see README, "Package resistance (r_d, r_s)").
+    r_s : float      Source series resistance [Ohm]. Also *degenerates* the
                    gate drive: the internal gate-source voltage is
-                   Vgs - rs*Id, so gm_eff = gm/(1 + rs*gm).
+                   v_gs - r_s*i_d, so g_m,eff = g_m/(1 + r_s*g_m).
     """
 
-    kp: float = 34.7
-    vth0: float = 3.0
-    ksub: float = 0.05
-    kcap: float = 0.0
-    m: float = 1.0
-    theta: float = 0.015
-    vsat: float = 1.5
-    nd: float = 0.0
-    eta: float = 0.02
-    lam: float = 0.02
-    gk: float = 0.4
-    vthk: float = 1.6
-    kk: float = 0.1
-    vk: float = 10.0
-    vov_floor: float = 1e-3
-    rd: float = 0.0
-    rs: float = 0.0
+    k_p: float = 34.7
+    v_th0: float = 3.0
+    v_sub: float = 0.05
+    v_ovmax: float = 0.0
+    k_ovsharp: float = 1.0
+    k_theta: float = 0.015
+    v_vsat: float = 1.5
+    k_kneesharp: float = 0.0
+    k_eta: float = 0.02
+    k_lambda: float = 0.02
+    g_k: float = 0.4
+    v_thk: float = 1.6
+    v_kovsoft: float = 0.1
+    v_dbsat: float = 10.0
+    v_kneemin: float = 1e-3
+    r_d: float = 0.0
+    r_s: float = 0.0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -99,59 +117,63 @@ DEFAULT = Params()
 PARAM_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Params))
 
 # Parameters fitted in log space (strictly positive, span decades).
-# kcap is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
-# nd likewise: 0 is the legitimate "legacy tanh" value.
+# v_ovmax is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
+# k_kneesharp likewise: 0 is the legitimate "legacy tanh" value.
 LOG_PARAMS: frozenset[str] = frozenset(
-    {"kp", "ksub", "theta", "vsat", "eta", "lam", "gk", "kk", "vk", "m"}
+    {
+        "k_p", "v_sub", "k_theta", "v_vsat", "k_eta", "k_lambda",
+        "g_k", "v_kovsoft", "v_dbsat", "k_ovsharp",
+    }
 )
 
 # Physically sensible search bounds, same units as Params.
 # Rationale for the non-obvious entries: README, "Bounds and fitting-space
 # decisions".
 BOUNDS: dict[str, tuple[float, float]] = {
-    "kp": (1e-2, 1e4),
-    "vth0": (0.0, 10.0),
-    "ksub": (5e-3, 1.0),
-    # Linear space; lower bound deliberately well above 0 (a free kcap must
+    "k_p": (1e-2, 1e4),
+    "v_th0": (0.0, 10.0),
+    "v_sub": (5e-3, 1.0),
+    # Linear space; lower bound deliberately well above 0 (a free v_ovmax must
     # never enter the "hard clip at ~0 V" region).
-    "kcap": (0.05, 100.0),
-    "m": (0.5, 40.0),
-    "theta": (1e-4, 5.0),
-    "vsat": (0.05, 10000.0),
-    # Linear space; lower bound above 0 for the same reason as kcap -- a free
-    # nd must never enter the region near the sentinel 0 ("legacy tanh")
-    # where a fitted value and the sentinel are numerically indistinguishable.
-    # Relaxed 0.5 -> 0.1 (session 10): the fit-B relaxed-bound probe landed
-    # at nd = 0.47, just under the old guard, so the data wants a knee softer
-    # than the old floor allowed.
-    "nd": (0.1, 40.0),
-    "eta": (1e-5, 1.0),
-    "lam": (1e-12, 1.0),
-    "gk": (1e-12, 100.0),
-    "vthk": (-5.0, 10.0),
-    "kk": (1e-3, 5.0),
-    "vk": (0.1, 1300.0),
-    "vov_floor": (1e-6, 1e-1),
+    "v_ovmax": (0.05, 100.0),
+    "k_ovsharp": (0.5, 40.0),
+    "k_theta": (1e-4, 5.0),
+    "v_vsat": (0.05, 10000.0),
+    # Linear space; lower bound above 0 for the same reason as v_ovmax -- a
+    # free k_kneesharp must never enter the region near the sentinel 0 ("legacy
+    # tanh") where a fitted value and the sentinel are numerically
+    # indistinguishable. Relaxed 0.5 -> 0.1 (session 10): the fit-B relaxed-
+    # bound probe landed at 0.47, just under the old guard, so the data wants a
+    # knee softer than the old floor allowed.
+    "k_kneesharp": (0.1, 40.0),
+    "k_eta": (1e-5, 1.0),
+    "k_lambda": (1e-12, 1.0),
+    "g_k": (1e-12, 100.0),
+    "v_thk": (-5.0, 10.0),
+    "v_kovsoft": (1e-3, 5.0),
+    "v_dbsat": (0.1, 1300.0),
+    "v_kneemin": (1e-6, 1e-1),
     # Linear space (the physical answer can be exactly zero); 0.5 Ohm is a
     # loose global ceiling only -- per device cap at datasheet Rds(on).
-    "rd": (0.0, 0.5),
-    "rs": (0.0, 0.5),
+    "r_d": (0.0, 0.5),
+    "r_s": (0.0, 0.5),
 }
 
 # Sensible starting free set: everything that shapes the static I-V curves.
-# kcap/m are deliberately absent -- freeing them would silently change every
-# existing fit and anchor (see README, "Bounds and fitting-space decisions").
+# v_ovmax/k_ovsharp are deliberately absent -- freeing them would silently
+# change every existing fit and anchor (see README, "Bounds and fitting-space
+# decisions").
 DEFAULT_FREE: tuple[str, ...] = (
-    "kp",
-    "vth0",
-    "theta",
-    "vsat",
-    "eta",
-    "lam",
-    "gk",
-    "vthk",
-    "rd",
-    "rs",
+    "k_p",
+    "v_th0",
+    "k_theta",
+    "v_vsat",
+    "k_eta",
+    "k_lambda",
+    "g_k",
+    "v_thk",
+    "r_d",
+    "r_s",
 )
 
 
@@ -181,7 +203,7 @@ def vector_bounds(
     """Bounds for the flat vector, mapped through the log transform.
 
     `overrides` replaces individual entries of :data:`BOUNDS` for one call
-    without mutating the module-level table (e.g. a per-device cap of rd/rs
+    without mutating the module-level table (e.g. a per-device cap of r_d/r_s
     at the datasheet Rds(on)).
     """
     table = {**BOUNDS, **(overrides or {})}

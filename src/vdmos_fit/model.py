@@ -1,20 +1,28 @@
 """Improved VDMOS channel current: one continuous expression, no triode/sat switch.
 
-    I_D = kp*Vov_eff*(v - v^2/(2*Vk)) / (1 + v/vsat) * (1 + lam*Vds*tanh(Vds/Vk))
-          + gk*Vds*tanh((Vgs - Vth_k)/kk)*tanh(Vds/Vk)
+    i_d = k_p*v_ov_eff*(v_dseff - v_dseff**2/(2*v_knee)) / (1 + v_dseff/v_vsat)
+            * (1 + k_lambda*v_ds*k_db)
+          + g_k*v_ds*k_kink*k_db
 
-    Vth     = Vth0 - eta*Vds*tanh(Vds/Vk)          DIBL (bounded)
-    Vov     = ksub*ln(1 + exp((Vgs - Vth)/ksub))   smooth subthreshold -> strong inversion
-    Vov_eff = Vov/(1 + (Vov/kcap)**m)**(1/m)       soft charge cap (kcap = 0 -> off)
-    Vk      = Vov_eff/(1 + theta*Vov_eff)          knee voltage (field-dependent mobility)
-    v       = Vk*tanh(Vds/Vk)                      soft drain variable (nd = 0, legacy)
-            = Vds/(1 + (Vds/Vk)**nd)**(1/nd)       power-law soft-min (nd > 0)
+    k_db     = tanh(v_ds/v_dbsat)                 drain-bias factor: 0 ohmic, ~1 above knee
+    v_th     = v_th0 - k_eta*v_ds*k_db            DIBL (bounded by the same factor)
+    v_ov     = v_sub*ln(1 + exp((v_gs - v_th)/v_sub))  smooth subthreshold -> strong inversion
+    v_ov_eff = v_ov/(1 + (v_ov/v_ovmax)**k_ovsharp)**(1/k_ovsharp)
+                                                soft charge cap (v_ovmax = 0 -> off)
+    v_knee   = v_ov_eff/(1 + k_theta*v_ov_eff)    knee voltage (field-dependent mobility)
+    v_dseff  = v_knee*tanh(v_ds/v_knee)           soft drain variable (k_kneesharp = 0, legacy)
+             = v_ds/(1 + (v_ds/v_knee)**k_kneesharp)**(1/k_kneesharp)   power-law soft-min
 
-With theta = vsat = eta = gk = 0 this is a smooth approximation of the Level-1
+Naming: <type prefix>_<suffix> with k_ for dimensionless factors and Greek letters
+(k_lambda / k_eta / k_theta keep their industry-standard symbols; k_p is A/V^2).
+`db` = drain **bias** (not drain-to-body: this model has no bulk terminal).
+Convention table and unit rules: README.md, "Naming convention".
+
+With k_theta = v_vsat = k_eta = g_k = 0 this is a smooth approximation of the Level-1
 equations with m_triode = 1: exact in the ohmic limit and in deep saturation,
 up to ~6 % low around the knee (tests/test_model.py::test_level1_limit_agreement).
 
-Design rationale -- Level-1 comparison, gate-cap physics, package-R solver
+Design rationale -- Level-1 comparison, charge-cap physics, package-R solver
 derivation -- lives in the project README.md, not in these docstrings.
 """
 
@@ -27,153 +35,157 @@ from .params import DEFAULT, Params
 __all__ = ["vdmos_id", "vdmos_id_level1"]
 
 
-def vdmos_id(vds, vgs, p: Params = DEFAULT) -> np.ndarray:
-    """Drain current [A] of the improved VDMOS, including package rd/rs.
+def vdmos_id(v_ds, v_gs, p: Params = DEFAULT) -> np.ndarray:
+    """Drain current [A] of the improved VDMOS, including package r_d/r_s.
 
     Parameters
     ----------
-    vds, vgs : float or array-like, broadcast together
+    v_ds, v_gs : float or array-like, broadcast together
         Drain-source and gate-source *terminal* voltages [V].
     p : Params
-        Model parameter set (see :mod:`vdmos_fit.params`). rd = rs = 0 selects
+        Model parameter set (see :mod:`vdmos_fit.params`). r_d = r_s = 0 selects
         the intrinsic fast path (bit-identical to the pre-package-R model).
 
     Returns
     -------
     ndarray | float
-        I_D [A], same broadcast shape as (vds, vgs).
+        i_d [A], same broadcast shape as (v_ds, v_gs).
     """
-    vds = np.asarray(vds, dtype=float)
-    vgs = np.asarray(vgs, dtype=float)
-    vds, vgs = np.broadcast_arrays(vds, vgs)
-    if p.rd == 0.0 and p.rs == 0.0:
-        return _channel_current(vds, vgs, p)
+    v_ds = np.asarray(v_ds, dtype=float)
+    v_gs = np.asarray(v_gs, dtype=float)
+    v_ds, v_gs = np.broadcast_arrays(v_ds, v_gs)
+    if p.r_d == 0.0 and p.r_s == 0.0:
+        return _channel_current(v_ds, v_gs, p)
     return _solve_package_r(
-        vds, vgs, p.rd, p.rs, lambda d, g: _channel_current(d, g, p)
+        v_ds, v_gs, p.r_d, p.r_s, lambda d, g: _channel_current(d, g, p)
     )
 
 
-def _channel_current(vds, vgs, p: Params) -> np.ndarray:
+def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:
     """Intrinsic channel current at the *internal* node voltages (no package R)."""
-    # Common drain-bias gate: 0 in the ohmic region, ~1 well above the knee.
-    gate = np.tanh(vds / p.vk)
+    # Common drain-bias factor: 0 in the ohmic region, ~1 well above the knee.
+    k_db = np.tanh(v_ds / p.v_dbsat)
 
-    # 1) DIBL-shifted threshold (bounded by the same gate).
-    vth = p.vth0 - p.eta * vds * gate
+    # 1) DIBL-shifted threshold (bounded by the same factor).
+    v_th = p.v_th0 - p.k_eta * v_ds * k_db
 
     # 2) Smooth overdrive, overflow-safe softplus.
-    z = np.clip((vgs - vth) / p.ksub, -700.0, 700.0)
-    vov = p.ksub * np.log1p(np.exp(z))
+    z = np.clip((v_gs - v_th) / p.v_sub, -700.0, 700.0)
+    v_ov = p.v_sub * np.log1p(np.exp(z))
 
-    # 2b) Soft charge cap (kcap = 0 is the identity; see README).
-    vov = _soft_cap(vov, p.kcap, p.m)
+    # 2b) Soft charge cap (v_ovmax = 0 is the identity; see README).
+    v_ov_eff = _soft_cap(v_ov, p.v_ovmax, p.k_ovsharp)
 
     # 3) Knee voltage from vertical-field mobility degradation, built from the
     # CAPPED overdrive (charge and knee saturate together; see README).
-    vknee = np.maximum(vov / (1.0 + p.theta * vov), p.vov_floor)
+    v_knee = np.maximum(v_ov_eff / (1.0 + p.k_theta * v_ov_eff), p.v_kneemin)
 
-    # 4) Soft drain variable: v -> Vds for Vds << Vk, v -> Vk for Vds >> Vk.
-    #    nd = 0 (default) keeps the legacy tanh soft-switch. nd > 0 uses the
-    #    same power-law soft-min as the gate cap, which decouples the knee
-    #    WIDTH from the knee voltage: dv/dVds(0) = 1 and v -> Vk hold for
-    #    every nd, so Ron and the Id,sat plateau are untouched while the
-    #    transition sharpens (nd -> inf is a hard min) or softens (nd = 1,
-    #    harmonic). Sign-preserving so negative Vds stays finite (the model
-    #    is unphysical there until the body diode, but must not emit NaN).
-    if p.nd == 0.0:
-        v = vknee * np.tanh(vds / vknee)
+    # 4) Soft drain variable: v_dseff -> v_ds for v_ds << v_knee, -> v_knee for
+    #    v_ds >> v_knee. k_kneesharp = 0 (default) keeps the legacy tanh
+    #    soft-switch; k_kneesharp > 0 uses the same power-law soft-min as the
+    #    charge cap, which decouples the knee WIDTH from the knee voltage:
+    #    dv_dseff/dv_ds(0) = 1 and v_dseff -> v_knee hold for every
+    #    k_kneesharp, so Ron and the i_d,sat plateau are untouched while the
+    #    transition sharpens (k_kneesharp -> inf is a hard min) or softens
+    #    (k_kneesharp = 1, harmonic). Sign-preserving so negative v_ds stays
+    #    finite (the model is unphysical there until the body diode, but must
+    #    not emit NaN).
+    if p.k_kneesharp == 0.0:
+        v_dseff = v_knee * np.tanh(v_ds / v_knee)
     else:
-        v = np.sign(vds) * _soft_min(np.abs(vds), vknee, p.nd)
+        v_dseff = np.sign(v_ds) * _soft_min(np.abs(v_ds), v_knee, p.k_kneesharp)
 
     # 5) Unified channel charge term (triode + saturation in one C^1 expression).
-    ich = p.kp * vov * (v - 0.5 * v * v / vknee)
+    i_ch = p.k_p * v_ov_eff * (v_dseff - 0.5 * v_dseff * v_dseff / v_knee)
 
     # 6) Velocity saturation + gated output conductance.
-    ich /= 1.0 + v / p.vsat
-    ich *= 1.0 + p.lam * vds * gate
+    i_ch /= 1.0 + v_dseff / p.v_vsat
+    i_ch *= 1.0 + p.k_lambda * v_ds * k_db
 
-    # 7) Trench kink. One-sided sigmoid on purpose: bare tanh() is odd and
-    #    injects non-physical negative current below the kink onset; the
-    #    0.5*(1 + tanh(.)) form matches tanh above onset and decays to zero
-    #    below (see README, "Trench kink: one-sided sigmoid").
-    kink_gate = 0.5 * (1.0 + np.tanh((vgs - p.vthk) / p.kk))
-    ikink = p.gk * vds * kink_gate * gate
+    # 7) Trench kink: a gate-gated parallel drain conductance, NOT a Vgs-dependent
+    #    CLM (it is additive and independent of the channel term -- README,
+    #    "Trench kink: one-sided sigmoid"). One-sided sigmoid on purpose: bare
+    #    tanh() is odd and injects non-physical negative current below the kink
+    #    onset; the 0.5*(1 + tanh(.)) form matches tanh above onset and decays to
+    #    zero below.
+    k_kink = 0.5 * (1.0 + np.tanh((v_gs - p.v_thk) / p.v_kovsoft))
+    i_kink = p.g_k * v_ds * k_kink * k_db
 
-    return ich + ikink
+    return i_ch + i_kink
 
 
 def _soft_min(x, k, n):
     """Power-law soft-min (x**-n + k**-n)**(-1/n) = x/(1 + (x/k)**n)**(1/n).
 
     Log-space (logaddexp) so x**n cannot overflow (n ~ 10-40 is a fitted
-    regime). Requires x >= 0, k > 0, n > 0. Properties (shared by the gate
+    regime). Requires x >= 0, k > 0, n > 0. Properties (shared by the charge
     cap and the drain soft-switch): identity for x << k, asymptote k for
     x >> k, derivative (1 + (x/k)**n)**(-1/n - 1) so 0 <= df/dx <= 1 --
     which is what keeps the package-R solver bracket invariant
-    dg/dId <= -1 intact. """
+    dg/di_d <= -1 intact. """
     with np.errstate(divide="ignore", invalid="ignore"):
         t = n * (np.log(np.maximum(x, 1e-300)) - np.log(k))
     return x * np.exp(-np.logaddexp(0.0, t) / n)
 
 
-def _soft_cap(vov, kcap: float, m: float):
-    """Soft power-law cap vov/(1 + (vov/kcap)**m)**(1/m), evaluated in log space.
+def _soft_cap(v_ov, v_ovmax: float, k_ovsharp: float):
+    """Soft power-law cap v_ov/(1 + (v_ov/v_ovmax)**k_ovsharp)**(1/k_ovsharp), in log space.
 
-    Log-space form prevents overflow of (vov/kcap)**m (m ~ 10-40 is a fitted
-    regime). kcap <= 0 returns vov unchanged -- the exact pre-cap model, bit
-    for bit. Properties and why 0 <= dVov_eff/dVov <= 1 matters: README,
-    "Gate-cap numerics".
+    Log-space form prevents overflow of (v_ov/v_ovmax)**k_ovsharp (k_ovsharp ~
+    10-40 is a fitted regime). v_ovmax <= 0 returns v_ov unchanged -- the exact
+    pre-cap model, bit for bit. Properties and why 0 <= dv_ov_eff/dv_ov <= 1
+    matters: README, "Charge-cap numerics".
     """
-    if kcap <= 0.0:
-        return vov
-    return _soft_min(vov, kcap, m)
+    if v_ovmax <= 0.0:
+        return v_ov
+    return _soft_min(v_ov, v_ovmax, k_ovsharp)
 
 
 def _solve_package_r(
-    vds: np.ndarray,
-    vgs: np.ndarray,
-    rd: float,
-    rs: float,
+    v_ds: np.ndarray,
+    v_gs: np.ndarray,
+    r_d: float,
+    r_s: float,
     f,
     *,
     atol: float = 1e-12,
     rtol: float = 1e-10,
     max_iter: int = 60,
 ) -> np.ndarray:
-    """Solve Id = f(Vds - (rd + rs)*Id, Vgs - rs*Id) for the terminal currents.
+    """Solve i_d = f(v_ds - (r_d + r_s)*i_d, v_gs - r_s*i_d) for the terminal currents.
 
-    Bracketed safeguarded Newton on Id in [0, Vds/(rd+rs)] with a stall guard
-    and bisection fallback; fixed-point iteration is NOT used (it diverges --
-    see README, "Package resistance (rd, rs)" and "Package-R solver").
-    Forward polarity only (Vds >= 0). Raises RuntimeError if any grid point
+    Bracketed safeguarded Newton on i_d in [0, v_ds/(r_d + r_s)] with a stall
+    guard and bisection fallback; fixed-point iteration is NOT used (it diverges
+    -- see README, "Package resistance (r_d, r_s)" and "Package-R solver").
+    Forward polarity only (v_ds >= 0). Raises RuntimeError if any grid point
     fails to converge; never silently returns an unconverged current.
     """
-    if rd < 0.0 or rs < 0.0:
-        raise ValueError(f"rd and rs must be >= 0 (got rd={rd}, rs={rs})")
-    if np.any(vds < 0.0):
+    if r_d < 0.0 or r_s < 0.0:
+        raise ValueError(f"r_d and r_s must be >= 0 (got r_d={r_d}, r_s={r_s})")
+    if np.any(v_ds < 0.0):
         raise ValueError(
-            "package-R embedding requires Vds >= 0: the channel-only model is "
+            "package-R embedding requires v_ds >= 0: the channel-only model is "
             "singular/garbage for reverse polarity (needs the body diode)."
         )
-    rtot = rd + rs
-    if rtot == 0.0:
-        return f(vds, vgs)
+    r_tot = r_d + r_s
+    if r_tot == 0.0:
+        return f(v_ds, v_gs)
 
-    lo = np.zeros_like(vds)
-    hi = vds / rtot
-    idc = 0.5 * (lo + hi)
-    stall = np.zeros(vds.shape, dtype=int)
+    lo = np.zeros_like(v_ds)
+    hi = v_ds / r_tot
+    i_d = 0.5 * (lo + hi)
+    stall = np.zeros(v_ds.shape, dtype=int)
     prev_width = None
 
     g = None
     for _ in range(max_iter):
-        vd_i = vds - rtot * idc
-        vg_i = vgs - rs * idc
-        g = f(vd_i, vg_i) - idc
+        v_ds_int = v_ds - r_tot * i_d
+        v_gs_int = v_gs - r_s * i_d
+        g = f(v_ds_int, v_gs_int) - i_d
 
-        # g > 0 -> root above idc; g < 0 -> root below (g is strictly decreasing).
-        lo = np.where(g > 0.0, idc, lo)
-        hi = np.where(g < 0.0, idc, hi)
+        # g > 0 -> root above i_d; g < 0 -> root below (g is strictly decreasing).
+        lo = np.where(g > 0.0, i_d, lo)
+        hi = np.where(g < 0.0, i_d, hi)
 
         # Stall detector: a Newton two-cycle can shrink the bracket only
         # ~1e-5 per iteration; force bisection until it halves again.
@@ -182,24 +194,24 @@ def _solve_package_r(
             stall = np.where(width > 0.9 * prev_width, stall + 1, 0)
         prev_width = width
 
-        done = np.abs(g) <= atol + rtol * np.abs(idc)
+        done = np.abs(g) <= atol + rtol * np.abs(i_d)
         if done.all():
-            return idc
+            return i_d
 
         # Central-difference partials of f (model is C1).
-        hd = 1e-6 * np.maximum(1.0, np.abs(vd_i))
-        hg = 1e-6 * np.maximum(1.0, np.abs(vg_i))
-        fd = (f(vd_i + hd, vg_i) - f(vd_i - hd, vg_i)) / (2.0 * hd)
-        fg = (f(vd_i, vg_i + hg) - f(vd_i, vg_i - hg)) / (2.0 * hg)
-        dg = -rtot * fd - rs * fg - 1.0  # <= -1 always
+        hd = 1e-6 * np.maximum(1.0, np.abs(v_ds_int))
+        hg = 1e-6 * np.maximum(1.0, np.abs(v_gs_int))
+        fd = (f(v_ds_int + hd, v_gs_int) - f(v_ds_int - hd, v_gs_int)) / (2.0 * hd)
+        fg = (f(v_ds_int, v_gs_int + hg) - f(v_ds_int, v_gs_int - hg)) / (2.0 * hg)
+        dg = -r_tot * fd - r_s * fg - 1.0  # <= -1 always
 
-        cand = idc - g / dg
+        cand = i_d - g / dg
         # Accept Newton only inside the bracket, with real progress, and when
         # the bracket has not stalled; otherwise bisect.
         inside = (cand > lo) & (cand < hi)
-        moved = np.abs(cand - idc) > 1e-12 * (hi - lo)
+        moved = np.abs(cand - i_d) > 1e-12 * (hi - lo)
         cand = np.where(inside & moved & (stall < 3), cand, 0.5 * (lo + hi))
-        idc = np.where(done, idc, cand)
+        i_d = np.where(done, i_d, cand)
 
     raise RuntimeError(
         f"package-R solve failed after {max_iter} iterations: "
@@ -208,46 +220,51 @@ def _solve_package_r(
 
 
 def vdmos_id_level1(
-    vds,
-    vgs,
+    v_ds,
+    v_gs,
     *,
-    kp=28.0,
-    vth0=3.0,
-    ksub=0.05,
+    k_p=28.0,
+    v_th0=3.0,
+    v_sub=0.05,
     m_triode=1.2,
-    lam=0.02,
-    rd=0.0,
-    rs=0.0,
+    k_lambda=0.02,
+    r_d=0.0,
+    r_s=0.0,
 ):
     """LTspice Level-1 VDMOS drain current, as actually implemented.
 
-    The triode/saturation knee is at **Vds = Vov / m_triode** (not Vov), which
+    The triode/saturation knee is at **v_ds = v_ov / m_triode** (not v_ov), which
     makes Level-1 C1 continuous for any mtriode; m_triode is a pure shape
     knob. Verified against LTspice 26.0.1 .meas -- see README, "Why", and
-    tests/test_model.py::test_level1_is_c1_continuous. rd/rs use the same
+    tests/test_model.py::test_level1_is_c1_continuous. r_d/r_s use the same
     external series embedding as :func:`vdmos_id` (shared solver); pass
-    rd = rs = 0 for the bare equation reference.
+    r_d = r_s = 0 for the bare equation reference.
+
+    ``m_triode`` deliberately keeps the LTspice model-card spelling: this
+    function is a foreign-model adapter, and the name is the mapping.
     """
-    vds = np.asarray(vds, dtype=float)
-    vgs = np.asarray(vgs, dtype=float)
-    vds, vgs = np.broadcast_arrays(vds, vgs)
-    if rd == 0.0 and rs == 0.0:
-        return _level1_current(vds, vgs, kp=kp, vth0=vth0, ksub=ksub, m_triode=m_triode, lam=lam)
+    v_ds = np.asarray(v_ds, dtype=float)
+    v_gs = np.asarray(v_gs, dtype=float)
+    v_ds, v_gs = np.broadcast_arrays(v_ds, v_gs)
+    if r_d == 0.0 and r_s == 0.0:
+        return _level1_current(
+            v_ds, v_gs, k_p=k_p, v_th0=v_th0, v_sub=v_sub, m_triode=m_triode, k_lambda=k_lambda
+        )
     return _solve_package_r(
-        vds,
-        vgs,
-        rd,
-        rs,
+        v_ds,
+        v_gs,
+        r_d,
+        r_s,
         lambda d, g: _level1_current(
-            d, g, kp=kp, vth0=vth0, ksub=ksub, m_triode=m_triode, lam=lam
+            d, g, k_p=k_p, v_th0=v_th0, v_sub=v_sub, m_triode=m_triode, k_lambda=k_lambda
         ),
     )
 
 
-def _level1_current(vds, vgs, *, kp, vth0, ksub, m_triode, lam):
-    z = np.clip((vgs - vth0) / ksub, -700.0, 700.0)
-    vov = ksub * np.log1p(np.exp(z))
-    knee = vov / m_triode
-    tri = m_triode * kp * (vov * vds - 0.5 * m_triode * vds**2) * (1.0 + lam * vds)
-    sat = 0.5 * kp * vov**2 * (1.0 + lam * vds)
-    return np.where(vds < knee, tri, sat)
+def _level1_current(v_ds, v_gs, *, k_p, v_th0, v_sub, m_triode, k_lambda):
+    z = np.clip((v_gs - v_th0) / v_sub, -700.0, 700.0)
+    v_ov = v_sub * np.log1p(np.exp(z))
+    v_knee = v_ov / m_triode
+    i_tri = m_triode * k_p * (v_ov * v_ds - 0.5 * m_triode * v_ds**2) * (1.0 + k_lambda * v_ds)
+    i_sat = 0.5 * k_p * v_ov**2 * (1.0 + k_lambda * v_ds)
+    return np.where(v_ds < v_knee, i_tri, i_sat)

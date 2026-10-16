@@ -43,14 +43,14 @@ def cmd_check(args) -> int:
         else "params: " + ", ".join(f"{k}={v:g}" for k, v in DEFAULT.as_dict().items())
     )
     ron = 0.05 / float(vdmos_id(0.05, 10.0, DEFAULT))
-    print(f"Ron(Vgs=10V) = {ron * 1e3:.2f} mOhm   (LTspice A/B reference: 4.27 mOhm)")
+    print(f"Ron(v_gs=10V) = {ron * 1e3:.2f} mOhm   (LTspice A/B reference: 4.27 mOhm)")
     for vg in (4, 6, 8, 10, 12):
         a = float(vdmos_id(20.0, vg, DEFAULT))
         b = float(vdmos_id_level1(20.0, vg))
-        print(f"  Vgs={vg:2d}  improved={a:7.1f} A   Level-1={b:8.1f} A   ratio={a / b:5.2f}")
+        print(f"  v_gs={vg:2d}  improved={a:7.1f} A   Level-1={b:8.1f} A   ratio={a / b:5.2f}")
     vg = np.linspace(6, 12, 7)
-    vov = 0.05 * np.log1p(np.exp((vg - 3.0) / 0.05))
-    alpha = np.polyfit(np.log(vov), np.log(vdmos_id(np.full_like(vg, 20.0), vg, DEFAULT)), 1)[0]
+    v_ov = 0.05 * np.log1p(np.exp((vg - 3.0) / 0.05))
+    alpha = np.polyfit(np.log(v_ov), np.log(vdmos_id(np.full_like(vg, 20.0), vg, DEFAULT)), 1)[0]
     print(f"alpha = {alpha:.2f}   (Level-1 gives 2.00)")
 
     out = Path(args.out)
@@ -69,8 +69,8 @@ def cmd_fit(args) -> int:
     data = load_csv(args.csv)
     print(
         f"loaded {args.csv}: {len(data)} points, "
-        f"Vgs {data.vgs.min():.2f}..{data.vgs.max():.2f} V, "
-        f"Vds {data.vds.min():.2f}..{data.vds.max():.2f} V"
+        f"v_gs {data.v_gs.min():.2f}..{data.v_gs.max():.2f} V, "
+        f"v_ds {data.v_ds.min():.2f}..{data.v_ds.max():.2f} V"
     )
     res = fit(data, start=DEFAULT, weight=args.weight, verbose=args.verbose)
     print(res.summary())
@@ -85,7 +85,7 @@ def cmd_fit(args) -> int:
 
 def cmd_demo(args) -> int:
     data = example_dataset()
-    print("pre-fit sensitivity (mean |d ln Id / d ln p|):")
+    print("pre-fit sensitivity (mean |d ln i_d / d ln p|):")
     for k, v in sensitivity_report(DEFAULT, data).items():
         print(f"  {k:<8s} {v:10.3g}")
     print()
@@ -115,7 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check", parents=[common], help="model sanity checks + reference plots")
 
     fp = sub.add_parser("fit", parents=[common], help="extract parameters from a measured CSV")
-    fp.add_argument("csv", help="CSV with columns vgs,vds,ids")
+    fp.add_argument("csv", help="CSV with columns v_gs,v_ds,i_d")
     fp.add_argument("--weight", choices=("relative", "abs"), default="relative")
     fp.add_argument("-v", "--verbose", action="store_true")
 

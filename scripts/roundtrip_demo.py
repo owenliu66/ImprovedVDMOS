@@ -25,37 +25,37 @@ from vdmos_fit import (  # noqa: E402
 from vdmos_fit.plotting import overlay_data  # noqa: E402
 
 TRUTH = Params(
-    kp=30.0, vth0=3.1, theta=0.02, vsat=1.2, eta=0.03, lam=0.015, gk=0.3, vthk=1.5
+    k_p=30.0, v_th0=3.1, k_theta=0.02, v_vsat=1.2, k_eta=0.03, k_lambda=0.015, g_k=0.3, v_thk=1.5
 )
 
 
 def main() -> int:
-    vgs = np.linspace(2.0, 14.0, 25)
-    vds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
-    data = make_synthetic(TRUTH, vgs, vds, noise=0.01, seed=7)
+    v_gs = np.linspace(2.0, 14.0, 25)
+    v_ds = np.array([0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0])
+    data = make_synthetic(TRUTH, v_gs, v_ds, noise=0.01, seed=7)
 
-    print("pre-fit sensitivity (mean |d ln Id / d ln p|):")
+    print("pre-fit sensitivity (mean |d ln i_d / d ln p|):")
     for k, v in sensitivity_report(DEFAULT, data).items():
-        print(f"  {k:<8s} {v:10.3g}")
+        print(f"  {k:<12s} {v:10.3g}")
 
     res = fit(data, start=DEFAULT)
     print()
     print(res.summary())
 
     print("\nrecovered vs truth:")
-    print(f"{'param':<10s} {'truth':>12s} {'fitted':>12s} {'error %':>10s}")
-    for name in ("kp", "vth0", "theta", "vsat", "eta", "lam", "gk", "vthk"):
+    print(f"{'param':<12s} {'truth':>12s} {'fitted':>12s} {'error %':>10s}")
+    for name in ("k_p", "v_th0", "k_theta", "v_vsat", "k_eta", "k_lambda", "g_k", "v_thk"):
         want, got = getattr(TRUTH, name), getattr(res.params, name)
         err = 100.0 * (got - want) / want
-        print(f"{name:<10s} {want:12.4g} {got:12.4g} {err:10.2f}")
+        print(f"{name:<12s} {want:12.4g} {got:12.4g} {err:10.2f}")
 
     print()
     print(identifiability(res).summary())
     print(
-        "\nnote: a large vthk error here is expected, not a fitter bug. The kink"
-        "\ntransition (vthk = 1.5 V, kk = 0.1 V) lies below the lowest sampled Vgs,"
-        "\nso this grid carries no information about it. Add dense Vgs points through"
-        "\nthe kink region, or fix vthk from measurement, before trusting it."
+        "\nnote: a large v_thk error here is expected, not a fitter bug. The kink"
+        "\ntransition (v_thk = 1.5 V, v_kovsoft = 0.1 V) lies below the lowest sampled v_gs,"
+        "\nso this grid carries no information about it. Add dense v_gs points through"
+        "\nthe kink region, or fix v_thk from measurement, before trusting it."
     )
 
     out = Path("out")
