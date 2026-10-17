@@ -1,18 +1,24 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-17 (session 12 — body diode: LTspice diode DC branch,
-multi-temperature extraction, ST8L65 diode record). Companion to
+*Snapshot: 2026-10-17 (session 14 — diode temperature coefficients a_ikf /
+a_rdiode (LTspice Tikf/Trs1), TC probe 4.15 %; session 13 closed session
+12's pending list). Companion to
 [README.md](../../README.md).*
 
 ## Current state
 
-Twelve sessions, all committed to `main` (session 11 renamed every parameter
+Fourteen sessions, all committed to `main` (session 11 renamed every parameter
 to the `<type prefix>_<suffix>` convention — names.xlsx + README "Naming
 convention" are the mapping, tag `pre-rename-2026-10` is the escape hatch, and
 the rename is bit-identical; session 12 added the **body diode** —
 `diode.py`, LTspice diode DC branch verified against LTspice 26.0.1,
 terminal-wired bypassing r_d/r_s, multi-temperature extraction, official
-record `ST8L65_DIODE`).
+record `ST8L65_DIODE`; session 13 closed session 12's pending list — test
+fixes, headless LTspice batch-mode verification, docs). Session 14 added the
+diode **linear temperature coefficients** `a_ikf`/`a_rdiode` (LTspice
+Tikf/Trs1, Tnom-referenced, verified to ~1e-5 against LTspice 26.0.1;
+TC=0 default is bit-identical to session 12) and **promoted the 6-param TC
+fit (4.15 %) to the official record**.
 The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (v_ovmax, k_ovsharp),
 mobility degradation via v_knee, velocity saturation, bounded DIBL, gated CLM,
@@ -66,7 +72,8 @@ Projects/ImprovedVDMOS/
   degradation via v_knee, velocity saturation, DIBL, gated CLM, one-sided kink
   sigmoid), embedded with package series resistance r_d/r_s, minus the body
   diode `vdmos_diode()` (LTspice diode DC branch: diffusion + high-injection
-  compression + recombination + r_diode + Xti/Eg temperature law), wired at
+  compression + recombination + r_diode + Xti/Eg temperature law + linear
+  Tikf/Trs1 temperature coefficients on i_kf/r_diode), wired at
   the terminals and bypassing r_d/r_s. No drift-leakage term: the off state
   is the gate-dependent softplus floor (channel) plus the diode reverse
   saturation when the diode is on.
@@ -90,7 +97,8 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **120 tests, all passing**; `ruff check` clean. Caveat: 8 of the digitizer
+- **127 tests, all passing** (1 Tk digitizer window test self-skipped in the
+  last full run); `ruff check` clean. Caveat: 8 of the digitizer
   window tests drive Tk and self-skip when the process has no display — in
   headless runs 0–2 of them skip (flaky per-process), so "N passed, M skipped"
   totals vary; don't pin the count.
@@ -105,6 +113,13 @@ Projects/ImprovedVDMOS/
 - **Diode off-sentinel bit-identity**: with i_s = i_sr = 0 (default),
   `vdmos_id` is bit-identical to the pre-diode model on the v_ds ≥ 0 grid
   (fast path and package-R path both pinned).
+- **Diode TC laws verified against LTspice 26.0.1**
+  (`test_diode.py::test_ltspice_tc_laws`): Tikf/Trs1 are LINEAR and
+  **Tnom-referenced** — agreement ~1e-5 relative at −55/25/100 °C ×
+  0.6/0.9 V; a 27 °C-referenced variant is excluded (0.2–0.6 % off), TC-off
+  excluded (up to 25 %). TC=0 default is bit-identical to the session-12
+  model; TC round trip recovers a_ikf/a_rdiode exactly (rank 6/6); the
+  extrapolation clamp keeps r_diode/i_kf positive at absurd temperatures.
 - All model anchors hold (r_d = r_s = 0 and v_ovmax = 0 fast paths are
   bit-identical to the pre-package-R / pre-cap model):
   Ron 4.27 mΩ, saturation table 31.5/91.0/157.1/225.9/297.7 A, α = 1.08,
@@ -265,55 +280,99 @@ Findings:
 - v_sub got worse as a one-point artifact (0.243 V ≈ 560 mV/dec). Queue 1
   (digitise a near-threshold transfer curve) is now the top data priority.
 
-## Current ST8L65 diode fit — OFFICIAL: fit A (4 free params, session 12)
+## Current ST8L65 diode fit — OFFICIAL: fit A (6 free params incl. TCs, session 14)
 
 `scripts/fit_st8l65_diode.py` fit A; outputs `out/st8l65_diode_params.txt`,
 `out/st8l65_diode_probe.txt`, `out/st8l65_diode_fit.png`. Record in
 `vdmos_fit.reference.ST8L65_DIODE`, drift-checked by the script
-(`OFFICIAL_TOL`) and pinned by `tests/test_diode.py::test_st8l65_diode_record_reproduces`
-(RMSE < 5 %, per-temperature < 8 %, r_diode interior, reverse floor < 10 µA,
-v_eg in (0.9, 1.3) eV).
+(`OFFICIAL_TOL`, 2.3e-6 [OK] at promotion) and pinned by
+`tests/test_diode.py::test_st8l65_diode_record_reproduces`
+(RMSE < 4.3 %, per-temperature < 7 %, r_diode interior, reverse floor < 10 µA,
+v_eg in (0.9, 1.3) eV, TCs interior and positive).
 
 Data: `data/ST8L65N044M9_diode.csv` — 30 points, I_sd 5–55 A at −55/25/150 °C.
-Free = i_s, r_diode, v_eg, i_kf; **k_n fixed 2.0** (physical diffusion limit),
+Free = i_s, r_diode, v_eg, i_kf, **a_ikf, a_rdiode** (TCs promoted session 14 —
+see the TC section below); **k_n fixed 2.0** (physical diffusion limit),
 k_xti fixed 3.0 (LTspice default), i_sr = 0, t_nom = 25 °C; device bound
 r_diode ≤ 20 mΩ. Four multi-starts, all converge to the same basin.
 
 | | fit A (OFFICIAL, 30 pts) |
 |---|---|
-| RMSE_rel | **4.78 %** (−55 °C 3.40, 25 °C 3.85, 150 °C 6.49) |
-| i_s | 3.701e-6 A (σ_rel 0.88 — weak prefactor, pair with k_n) |
-| r_diode | 1.586 mΩ (σ_rel 0.004) |
-| v_eg | 1.0967 eV (σ_rel 0.093 — silicon bandgap, sensed) |
-| i_kf | 17.45 A (σ_rel 5.2; r_diode↔i_kf corr +0.948) |
-| rank / cond | **4/4** / 6.13e3 |
-| reverse floor (−1 V, 25 °C) | 3.7 µA |
+| RMSE_rel | **4.15 %** (−55 °C 2.26, 25 °C 3.41, 150 °C 5.90) |
+| i_s | 3.835e-6 A (σ_rel 1.09 — weak prefactor, pair with k_n) |
+| r_diode | 1.497 mΩ (σ_rel 0.005) |
+| v_eg | 1.0881 eV (σ_rel 0.16 — silicon bandgap, sensed) |
+| i_kf | 15.63 A (σ_rel 5.9; r_diode↔i_kf corr +0.953) |
+| a_ikf | +0.00545 /°C (σ_rel 0.028) |
+| a_rdiode | +0.00341 /°C (σ_rel 0.019) |
+| rank / cond | **6/6** / 7.12e3 |
+| reverse floor (−1 V, 25 °C) | 3.8 µA |
 
 Findings / protocol decisions:
 
 - **The temperature law is mandatory**: a 25 °C-only fit predicts −55 °C
   out-of-sample at ~260 % error; V_T-only scaling (no Xti/Eg) predicts the
-  forward drop going UP with T — the data goes DOWN. v_eg ≈ 1.10 eV is
-  genuinely sensed (σ_rel 0.09) — the multi-temperature data pins it.
+  forward drop going UP with T — the data goes DOWN. v_eg ≈ 1.09 eV is
+  genuinely sensed (σ_rel 0.16) — the multi-temperature data pins it.
 - **k_n fixed at 2.0 from physics**: the k_n sweep (i_kf off) shows RMSE
   improving monotonically toward k_n ≈ 2.5–3 — ideality absorbing the
   high-injection bending, with the reverse floor scaling with i_s (3 pA at
-  k_n = 1 → 0.4 mA at k_n = 3). Freeing k_n on top of fit A buys 0.12 %
-  (4.66 %), lands at k_n = 2.07 with corr(i_s, k_n) = +1.000 — the
-  ideality/prefactor split is a degenerate valley; only the PAIR is pinned.
+  k_n = 1 → 0.4 mA at k_n = 3). Freeing k_n on top of the TC fit lands at
+  k_n = 1.31 (3.00 %, corr(i_s, k_n) = +0.996, reverse floor drifts to
+  3.9 nA — TC-off it was 2.07 / 4.66 % / 0.1–0.4 mA): the valley's DIRECTION
+  moves with the TCs, the unconstrained floor does not — k_n stays fixed
+  from physics, only the (k_n, i_s) pair and the curve are pinned.
 - **i_kf belongs in the primary set**: pinned off (sentinel 0.0 — NOT the
   1e-3 lower bound, which is an active knee that crushes the current) the
-  fit is 6.48 %; free, 4.78 %. The high-injection knee carries real
+  fit is 6.63 %; free, 4.15 %. The high-injection knee carries real
   curvature in the 5–55 A range.
 - **i_sr/k_nr unsensed**: freeing them gives identical RMSE with
   σ(i_sr) = inf — recombination lives below the 5 A data floor. Keep off.
-- **i_s is a weak prefactor** (σ_rel ≈ 0.9): quote the curve or the pair
+- **i_s is a weak prefactor** (σ_rel ≈ 1.1): quote the curve or the pair
   (k_n, i_s), never i_s alone — same doctrine as the channel knee cluster.
 - **Log-space packing is mandatory** for the diode fit: linear-space i_s
   gave rank-deficient Jacobians and a runaway basin at r_diode ≈ 0.34 Ω;
   log-space gives rank 4/4 and r_diode stable across starts. The per-device
   r_diode ≤ 20 mΩ bound (measured dV/dI is 3.4–11.7 mΩ) excludes the
   runaway even so.
+
+## Diode temperature coefficients (session 14) — PROMOTED to the official record
+
+`a_ikf` (LTspice **Tikf**) and `a_rdiode` (LTspice **Trs1**): linear per-°C
+laws `X(T) = X·(1 + a·(T − t_nom))`, Tnom-referenced — the exact LTspice
+form, pinned by `test_diode.py::test_ltspice_tc_laws`. Defaults 0 = off =
+bit-identical to the session-12 model; bounds (−0.005, +0.05) /°C keep the
+linear factor positive across −55…150 °C (worst 0.375), with a tiny clamp
+floor beyond so the solver bracket proof survives absurd extrapolation.
+`Trs2` (quadratic) deliberately not modelled — names.xlsx stops at Trs1.
+
+TC probe on the measured CSV (`scripts/fit_st8l65_diode.py`):
+
+| | fit A (OFFICIAL, TC off) | fit A + a_ikf + a_rdiode |
+|---|---|---|
+| RMSE_rel | 4.78 % | **4.15 %** |
+| −55 / 25 / 150 °C rms | 3.40 / 3.85 / 6.49 % | 2.26 / 3.41 / 5.90 % |
+| a_ikf | 0 (fixed) | +0.00545 /°C (σ_rel 0.028) |
+| a_rdiode | 0 (fixed) | +0.00341 /°C (σ_rel 0.019) |
+| i_kf / r_diode | 17.45 A / 1.586 mΩ | 15.64 A / 1.497 mΩ |
+| v_eg | 1.097 eV | 1.088 eV |
+| rank / cond | 4/4 / 6.13e3 | 6/6 / 7.12e3 |
+
+Findings:
+
+- **The user-flagged effect is real**: a temperature-independent r_diode/i_kf
+  bends the multi-T curves; the TCs fix most of the −55 °C residual
+  (3.40→2.26 %) and cut the overall RMSE 13 % relative.
+- **TCs are the best-sensed diode parameters after r_diode** (σ_rel 2–3 %),
+  interior to bounds, one basin across three multi-starts. Physical values:
+  a_rdiode = +0.34 %/°C (silicon-ish series R), a_ikf = +0.54 %/°C (the
+  high-injection knee rises with T).
+- **Promoted 2026-10-17 (user go-ahead)**: `ST8L65_DIODE` is now the 6-param
+  TC fit — script drift check 2.3e-6 [OK], pinned-test bound tightened to
+  < 4.3 % (sits between the 4.15 % record and the 4.78 % TC-off level),
+  per-T < 7 %, TCs asserted interior and positive. The TC-off protocol lives
+  on as the script's `tc_off_probe` (reproduces 4.78 %) and as the
+  session-12 baseline quoted above.
 
 ## Open problems
 

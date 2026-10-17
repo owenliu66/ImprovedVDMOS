@@ -106,9 +106,19 @@ class Params:
     k_nr : float     Recombination emission coefficient [-] (LTspice Nr).
     i_kf : float     High-injection knee current [A] (LTspice Ikf); 0 = off
                    (LTspice Ikf = inf equivalent). Fitted regime is tens of A.
+    a_ikf : float    Linear temperature coefficient of i_kf [1/degC] (LTspice
+                   Tikf): i_kf(T) = i_kf*(1 + a_ikf*(T - t_nom)), exactly the
+                   LTspice law (verified against LTspice 26.0.1 .meas probes).
+                   0 = no temperature dependence (LTspice default) -- the
+                   pre-TC model, bit-identical. Linear space: can be negative.
     r_diode : float  Diode series resistance [Ohm] (LTspice Rs, renamed to
                    avoid the r_s collision). On the diode path only -- the
                    diode connects to the device terminals and bypasses r_d/r_s.
+    a_rdiode : float Linear temperature coefficient of r_diode [1/degC]
+                   (LTspice Trs1): r_diode(T) = r_diode*(1 + a_rdiode*(T -
+                   t_nom)). 0 = off (LTspice default). NEAR-COLLISION WARNING:
+                   scales r_diode (the DIODE's Rs), NOT the channel package
+                   resistance r_s. LTspice's quadratic Trs2 is not modelled.
     t_nom : float    Temperature [degC] at which i_s/i_sr are defined
                    (LTspice Tnom). Fixed, never fitted.
     k_xti : float    Saturation-current temperature exponent [-] (LTspice Xti).
@@ -140,7 +150,9 @@ class Params:
     i_sr: float = 0.0
     k_nr: float = 2.0
     i_kf: float = 0.0
+    a_ikf: float = 0.0
     r_diode: float = 0.0
+    a_rdiode: float = 0.0
     t_nom: float = 25.0
     k_xti: float = 3.0
     v_eg: float = 1.11
@@ -213,7 +225,16 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "i_sr": (1e-22, 1e-3),
     "k_nr": (1.0, 4.0),
     "i_kf": (1e-3, 1e6),
+    # Linear TCs (LTspice Tikf/Trs1): can be negative, 0 is the legitimate
+    # "no temperature dependence" default -- linear space, never logged. The
+    # bounds keep the linear factor 1 + a*(T - t_nom) POSITIVE across the
+    # device range (-55..150 C => |dT| <= 125 K: worst factor 1 - 5e-3*125 =
+    # 0.375); outside that range diode.py clamps the factor at a tiny floor.
+    # Physical scale: silicon/metal resistance TCs are ~+0.4..1 %/K, so
+    # a_rdiode ~ +0.004..0.01; a 5 %/K ceiling is deliberately generous.
+    "a_ikf": (-5e-3, 5e-2),
     "r_diode": (0.0, 0.5),
+    "a_rdiode": (-5e-3, 5e-2),
     "k_xti": (0.5, 10.0),
     "v_eg": (0.1, 2.0),
 }

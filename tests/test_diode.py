@@ -49,7 +49,9 @@ def naive_diode(v_di, p: Params, t_c: float = 25.0) -> float:
     """Straightforward float64 evaluation of the documented equation.
 
     Only valid where exp() stays tame (|v_di| well under ~1.2 V) -- used for
-    hand-value checks, never for solver brackets.
+    hand-value checks, never for solver brackets. Applies the LTspice Tikf
+    linear TC to i_kf; r_diode's Trs1 TC is the CALLER's job (this function
+    evaluates at the internal diode voltage, where no r appears).
     """
     t_k = t_c + 273.15
     vt = K_B * t_k / Q
@@ -57,7 +59,8 @@ def naive_diode(v_di, p: Params, t_c: float = 25.0) -> float:
     x = np.clip(v_di / (p.k_n * vt), -700.0, 700.0)  # bracket-endpoint safety
     j = i_s_t * np.expm1(x)
     if p.i_kf > 0.0 and j > 0.0:
-        j = j / np.sqrt(1.0 + j / p.i_kf)
+        i_kf_t = p.i_kf * max(1.0 + p.a_ikf * (t_c - p.t_nom), 1e-6)
+        j = j / np.sqrt(1.0 + j / i_kf_t)
     if p.i_sr > 0.0:
         i_sr_t = _scaled_saturation(p.i_sr, p.k_nr, p, np.array([t_k]))[0]
         j += i_sr_t * np.expm1(np.clip(v_di / (p.k_nr * vt), -700.0, 700.0))
@@ -187,6 +190,79 @@ def test_overflow_safety():
 
 
 # ---------------------------------------------------------------------------
+# Linear temperature coefficients (LTspice Tikf / Trs1)
+# ---------------------------------------------------------------------------
+
+def test_tc_identity_at_tnom_and_sentinel():
+    """TC factors are exactly 1.0 at t_c = t_nom; TC=0 is bit-identical."""
+    p_tc = P_ON.replace(a_ikf=0.006, a_rdiode=0.008)
+    vs = np.array([-1.0, -0.01, 0.0, 0.05, 0.4, 0.73, 1.05])
+    # at t_nom the multiplier is 1 + a*0 = 1.0 exactly -> bit-identical
+    assert np.array_equal(vdmos_diode(vs, p_tc, t_c=25.0),
+                          vdmos_diode(vs, P_ON, t_c=25.0))
+    # TC=0 at any T: 1 + 0*dT = 1.0 exactly in IEEE -> bit-identical
+    p_tc0 = P_ON.replace(a_ikf=0.0, a_rdiode=0.0)
+    for t in (-55.0, 150.0):
+        assert np.array_equal(vdmos_diode(vs, p_tc0, t_c=t),
+                              vdmos_diode(vs, P_ON, t_c=t))
+    # the identity above is not vacuous: TCs bite away from t_nom
+    assert not np.array_equal(vdmos_diode(vs, p_tc, t_c=150.0),
+                              vdmos_diode(vs, P_ON, t_c=150.0))
+
+
+def test_tc_solver_vs_brentq_at_100c():
+    """r_diode(T)/i_kf(T) laws: solver matches independent brentq at 100 degC."""
+    p = P_ON.replace(a_rdiode=0.008, a_ikf=0.004)
+    t_c = 100.0
+    r_t = p.r_diode * (1.0 + p.a_rdiode * (t_c - p.t_nom))
+
+    def root(v_term):
+        def f(v_di):
+            return (naive_diode(v_di, p.replace(r_diode=0.0), t_c)
+                    - (v_term - v_di) / r_t)
+
+        lo = min(0.0, v_term / r_t)
+        hi = max(0.0, v_term / r_t)
+        x = brentq(f, lo, hi, xtol=1e-14, rtol=8.9e-16)
+        return (v_term - x) / r_t  # current, not internal voltage
+
+    vs = np.array([-1.0, -0.01, 0.0, 0.05, 0.4, 0.73, 1.05])
+    sol = vdmos_diode(vs, p, t_c=t_c)
+    ref = np.array([root(v) for v in vs])
+    msk = vs != 0.0
+    np.testing.assert_allclose(sol[msk], ref[msk], rtol=1e-6, atol=1e-12)
+    assert sol[vs == 0.0][0] == 0.0
+
+
+def test_ikf_tc_raises_current_in_high_injection():
+    """a_ikf > 0 raises i_kf(T) -> less sqrt compression -> more current."""
+    p = P_ON.replace(a_ikf=0.010)  # i_kf(150 C) = 17.5 * 2.25
+    v = 0.95  # J >> i_kf at 150 C: sqrt-compressed regime
+    i_off = float(vdmos_diode(v, P_ON, t_c=150.0))
+    i_on = float(vdmos_diode(v, p, t_c=150.0))
+    assert i_on > i_off
+    # zero effect at t_nom (factor exactly 1.0)
+    assert float(vdmos_diode(v, p, t_c=25.0)) == float(vdmos_diode(v, P_ON, t_c=25.0))
+
+
+def test_rdiode_tc_throttles_series_dominated_current():
+    """a_rdiode > 0 raises r(T); at high current the bigger drop throttles i."""
+    p = P_ON.replace(a_rdiode=0.010)  # r_diode(150 C) = 1.6 m * 2.25 = 3.6 m
+    i_off = float(vdmos_diode(1.05, P_ON, t_c=150.0))
+    i_on = float(vdmos_diode(1.05, p, t_c=150.0))
+    assert i_on < i_off
+
+
+def test_tc_extrapolation_guard():
+    """Would-be-negative TC factors clamp to a tiny floor: finite, monotone."""
+    p = P_ON.replace(a_rdiode=-0.005, a_ikf=-0.005)
+    # 1 - 0.005*(1000-25) = -3.875 -> clamped; r and i_kf stay positive
+    i = vdmos_diode(np.linspace(-1.0, 1.2, 50), p, t_c=1000.0)
+    assert np.all(np.isfinite(i))
+    assert np.all(np.diff(i) >= -1e-9)
+
+
+# ---------------------------------------------------------------------------
 # Integration into vdmos_id
 # ---------------------------------------------------------------------------
 
@@ -279,6 +355,28 @@ def test_diode_sensitivity_report_live_columns():
     assert all(v > 1e-3 for v in sens.values())
 
 
+def test_diode_round_trip_with_tc():
+    """fit_diode recovers a_ikf/a_rdiode too: 3 temperatures sense both TCs."""
+    truth = DEFAULT.replace(i_s=3.7e-6, k_n=2.0, i_kf=15.0, r_diode=1.5e-3,
+                            v_eg=1.10, k_xti=3.0, t_nom=25.0,
+                            a_rdiode=0.006, a_ikf=0.004)
+    data = make_synthetic_diode(truth, np.linspace(5.0, 55.0, 10),
+                                [-55.0, 25.0, 150.0])
+    start = DEFAULT.replace(k_n=2.0, i_s=1e-8, i_kf=3.0, r_diode=0.003,
+                            v_eg=0.8, k_xti=3.0, t_nom=25.0,
+                            a_rdiode=0.002, a_ikf=0.001)
+    free = ("i_s", "r_diode", "v_eg", "i_kf", "a_rdiode", "a_ikf")
+    res = fit_diode(data, start=start, free=free,
+                    bounds_overrides={"r_diode": (0.0, 0.020)})
+    p = res.params
+    assert res.rmse_rel < 1e-6
+    assert p.r_diode == pytest.approx(1.5e-3, rel=0.02)
+    assert p.a_rdiode == pytest.approx(0.006, rel=0.10)
+    assert p.i_kf == pytest.approx(15.0, rel=0.10)
+    assert p.a_ikf == pytest.approx(0.004, rel=0.20)
+    assert identifiability(res, free).rank == 6
+
+
 # ---------------------------------------------------------------------------
 # Pinned record (mirrors test_st8l65_official for the channel)
 # ---------------------------------------------------------------------------
@@ -288,16 +386,21 @@ def test_st8l65_diode_record_reproduces():
     data = load_diode_csv(DIODE_CSV)
     model = vdmos_diode(data.v_sd, ST8L65_DIODE, t_c=data.temp_c)
     rel = (model - data.i_sd) / data.i_sd
-    assert np.sqrt(np.mean(rel**2)) < 0.049, "official diode fit regressed"
+    # record RMSE is 4.15 % (TC fit, session 14); bound sits between that and
+    # the TC-off 4.78 % so a silent TC regression fails the suite
+    assert np.sqrt(np.mean(rel**2)) < 0.043, "official diode fit regressed"
     # per-temperature sanity
     for t in (-55.0, 25.0, 150.0):
         msk = np.isclose(data.temp_c, t)
-        assert np.sqrt(np.mean(rel[msk] ** 2)) < 0.08
+        assert np.sqrt(np.mean(rel[msk] ** 2)) < 0.07
     # interior values, physical reverse floor, sensed v_eg
     assert 0.0 < ST8L65_DIODE.r_diode < 0.020
     assert abs(float(vdmos_diode(-1.0, ST8L65_DIODE))) < 1e-5
     assert 0.9 < ST8L65_DIODE.v_eg < 1.3
     assert ST8L65_DIODE.i_sr == 0.0 and ST8L65_DIODE.k_n == 2.0
+    # TCs interior and positive: silicon-like series-R TC, knee rises with T
+    assert 0.0 < ST8L65_DIODE.a_rdiode < 0.05
+    assert 0.0 < ST8L65_DIODE.a_ikf < 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +426,7 @@ LTSPICE = _ltspice_exe()
 
 
 def _run_ltspice_meas(cir_text: str, tmp_path: Path) -> dict[str, float]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     cir = tmp_path / "xcheck.cir"
     cir.write_text(cir_text)
     subprocess.run([LTSPICE, "-b", "-w", str(cir)], cwd=tmp_path,
@@ -380,3 +484,36 @@ def test_ltspice_cross_validation(tmp_path):
         lt = abs(meas_lo[names[v]])
         ours = float(vdmos_diode(v, p, t_c=-55.0))
         assert ours == pytest.approx(lt, rel=2e-2), f"-55 C @ {v} V: {ours} vs {lt}"
+
+
+@pytest.mark.skipif(LTSPICE is None, reason="LTspice not installed")
+def test_ltspice_tc_laws(tmp_path):
+    """Tikf/Trs1 linear TC laws (Tnom-referenced) match LTspice 26.0.1.
+
+    Probed 2026-10: agreement ~1e-5 relative at -55/25/100 degC x 0.6/0.9 V.
+    A 27 degC-referenced variant misses by 0.2-0.6 % (excluded by the 25 C
+    row, where the Tnom-referenced factor is exactly 1.0); TC-off misses by
+    up to 25 %. The quadratic Trs2 is not modelled (names.xlsx stops at Trs1).
+    """
+    p = DEFAULT.replace(i_s=1e-6, k_n=1.5, i_kf=5.0, r_diode=1e-3,
+                        k_xti=3.0, v_eg=1.11, t_nom=25.0,
+                        a_ikf=0.006, a_rdiode=0.008)
+    card = ("D(Is=1e-6 N=1.5 Ikf=5 Rs=1e-3 Xti=3 Eg=1.11 Tnom=25"
+            " Tikf=0.006 Trs1=0.008)")
+    biases = (0.6, 0.9)
+    names = {0.6: "m06", 0.9: "m09"}
+    for temp in (25.0, 100.0, -55.0):
+        cir = (
+            f"* tc xcheck {temp:g}C\n"
+            f".model bodydio {card}\n"
+            "D1 a 0 bodydio\nV1 a 0 dc 0\n"
+            ".dc V1 0 1 0.05\n"
+            + "".join(f".meas dc {names[v]} FIND I(V1) AT={v}\n" for v in biases)
+            + f".temp {temp:g}\n.end\n"
+        )
+        meas = _run_ltspice_meas(cir, tmp_path / f"t{int(temp)}")
+        for v in biases:
+            lt = abs(meas[names[v]])
+            ours = float(vdmos_diode(v, p, t_c=temp))
+            assert ours == pytest.approx(lt, rel=1e-3), (
+                f"TC law {temp} C @ {v} V: {ours} vs {lt}")

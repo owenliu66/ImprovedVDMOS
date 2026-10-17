@@ -5,16 +5,21 @@ Data: data/ST8L65N044M9_diode.csv -- 30 points, I_sd 5-55 A at -55/25/150 degC
 
 PROTOCOL (locked after the probe campaign, README "Body diode"):
 
-  * Fit A (OFFICIAL): free = i_s, r_diode, v_eg, i_kf; k_n FIXED at 2.0
-    (physical diffusion limit), k_xti fixed at 3.0 (LTspice default), i_sr = 0.
-    Four multi-starts, r_diode capped at 20 mOhm (DEVICE_BOUNDS).
+  * Fit A (OFFICIAL, session 14): free = i_s, r_diode, v_eg, i_kf, a_ikf,
+    a_rdiode; k_n FIXED at 2.0 (physical diffusion limit), k_xti fixed at
+    3.0 (LTspice default), i_sr = 0. Four multi-starts, r_diode capped at
+    20 mOhm (DEVICE_BOUNDS). RMSE 4.15 %.
+  * Why the TCs (a_ikf/a_rdiode, LTspice Tikf/Trs1 linear laws) are in the
+    primary set: TC-off fit A (the session-12 record) sits at 4.78 %; the
+    TCs are the best-sensed diode parameters after r_diode (sigma_rel
+    0.019/0.028), interior, one basin across starts.
   * Why k_n fixed: freeing it buys ~0.1 % RMSE, lands at k_n = 2.07 with
     corr(i_s, k_n) = +1.000 (the ideality/prefactor split is a degenerate
     valley -- only the PAIR is pinned), and drifts the reverse-blocking
     floor. Fix k_n from physics (diffusion limit ~2), not from this data.
   * Why i_kf in the primary set: with i_kf pinned off (sentinel 0.0) the fit
-    is ~6.5 %; with it free, 4.8 %. The high-injection knee carries real
-    curvature in the 5-55 A range.
+    degrades badly. The high-injection knee carries real curvature in the
+    5-55 A range.
   * i_sr/k_nr stay off: freeing them changes nothing (unsensed above 5 A).
   * i_s is only meaningful PAIRED with k_n: the data has no low-current tail,
     so sigma_rel(i_s) ~ 1 (order of magnitude). Quote the curve, not i_s.
@@ -66,7 +71,7 @@ OUT = ROOT / "out"
 # suite can pin it too. main() re-derives fit A and checks drift (OFFICIAL_TOL).
 OFFICIAL_TOL = 1e-3
 
-FREE = ST8L65_DIODE_FREE  # ("i_s", "r_diode", "v_eg", "i_kf")
+FREE = ST8L65_DIODE_FREE  # ("i_s", "r_diode", "v_eg", "i_kf", "a_ikf", "a_rdiode")
 
 # Base start: k_n at the physical diffusion limit, k_xti at the LTspice
 # default, i_sr off. Channel parameters are irrelevant to the diode fit.
@@ -81,10 +86,11 @@ START = Params(
 DEVICE_BOUNDS = {"r_diode": (0.0, 0.020)}
 
 MULTI_START = [
-    dict(i_s=1e-8, r_diode=0.002, v_eg=1.11, i_kf=20.0),
-    dict(i_s=1e-6, r_diode=0.005, v_eg=1.20, i_kf=1.0),
-    dict(i_s=1e-12, r_diode=0.0005, v_eg=0.30, i_kf=1e4),
-    dict(i_s=1e-4, r_diode=0.001, v_eg=1.10, i_kf=50.0),
+    dict(i_s=1e-8, r_diode=0.002, v_eg=1.11, i_kf=20.0, a_ikf=0.0, a_rdiode=0.0),
+    dict(i_s=1e-6, r_diode=0.005, v_eg=1.20, i_kf=1.0, a_ikf=0.004, a_rdiode=0.004),
+    dict(i_s=1e-12, r_diode=0.0005, v_eg=0.30, i_kf=1e4,
+         a_ikf=-0.002, a_rdiode=0.010),
+    dict(i_s=1e-4, r_diode=0.001, v_eg=1.10, i_kf=50.0, a_ikf=0.010, a_rdiode=0.001),
 ]
 
 
@@ -97,6 +103,7 @@ def multi_fit(data: DiodeCurveSet, free=FREE, base=START) -> FitResult:
                         max_nfev=8000, bounds_overrides=DEVICE_BOUNDS)
         print(f"    start i_s={s['i_s']:8.3g} r_diode={s['r_diode']*1e3:6.3g}m"
               f" v_eg={s['v_eg']:6.3g} i_kf={s['i_kf']:8.3g}"
+              f" a=({s['a_ikf']:+.3f},{s['a_rdiode']:+.3f})"
               f" -> RMSE {res.rmse_rel * 100:6.2f} %"
               + ("" if res.success else "   [stopped]"))
         if best is None or res.rmse_rel < best.rmse_rel:
@@ -160,11 +167,14 @@ def kn_sweep_probe(data: DiodeCurveSet) -> str:
 
 
 def free_kn_probe(data: DiodeCurveSet) -> str:
-    """Free k_n on top of fit A: does the data want k_n > 2, and at what cost?
+    """Free k_n on top of fit A: does the data want a different k_n, and at what cost?
 
-    Expect k_n -> ~2.9 with i_s <-> k_n correlation ~ +1.000 and a reverse
-    floor in the 0.1-0.4 mA range -- the ideality/high-injection split is a
-    valley; only the PAIR (k_n, i_s) and the curve are pinned.
+    Expect a degenerate valley: with the TCs free the fit lands at k_n ~ 1.3
+    (it landed at 2.07 in the TC-off protocol) with i_s <-> k_n correlation
+    ~ +1.000 and a reverse floor that drifts by ORDERS of magnitude (nA here,
+    0.1-0.4 mA TC-off) -- the direction moves, the unconstrained floor does
+    not. The ideality/high-injection/TC split is a valley; only the PAIR
+    (k_n, i_s) and the curve are pinned. k_n stays fixed from physics.
     """
     lines = ["", "free-k_n probe (fit A + k_n + k_xti free):"]
     free = FREE + ("k_n", "k_xti")
@@ -203,6 +213,28 @@ def mechanism_probes(data: DiodeCurveSet, p_a: Params) -> str:
         f" | i_sr={res.params.i_sr:.3g} k_nr={res.params.k_nr:.3g}"
         f" | sigma_rel(i_sr)={ident.sigma_rel['i_sr']:.2g}"
         "  <- unsensed, keep off"
+    )
+    return "\n".join(lines)
+
+
+def tc_off_probe(data: DiodeCurveSet, p_a: Params) -> str:
+    """TCs pinned off (the session-12 record protocol): why they are in the
+    primary set now. Linear TCs (LTspice Tikf/Trs1) at 0 = no temperature
+    dependence; the fit degrades and the per-temperature residuals tilt.
+    """
+    lines = ["", "TC-off probe (fit A minus a_ikf/a_rdiode -- the session-12 "
+                  "record protocol):"]
+    res = fit_diode(data, start=p_a.replace(a_ikf=0.0, a_rdiode=0.0),
+                    free=("i_s", "r_diode", "v_eg", "i_kf"), weight="relative",
+                    max_nfev=8000, bounds_overrides=DEVICE_BOUNDS)
+    model = vdmos_diode(data.v_sd, res.params, t_c=data.temp_c)
+    rel = (model - data.i_sd) / data.i_sd
+    per_t = "  ".join(
+        f"{t:+.0f}C {np.sqrt(np.mean(rel[np.isclose(data.temp_c, t)] ** 2)) * 100:.2f}%"
+        for t in data.temp_grid())
+    lines.append(
+        f"  TC off: RMSE {res.rmse_rel * 100:.2f} % | per-T rms: {per_t}"
+        "  <- why the TCs are in the primary set"
     )
     return "\n".join(lines)
 
@@ -254,7 +286,7 @@ def main() -> None:
     print("\npre-fit sensitivity (start): "
           + "  ".join(f"{n}={v:.3g}" for n, v in sens.items()))
 
-    print("\n--- fit A (OFFICIAL protocol): i_s, r_diode, v_eg, i_kf free ---")
+    print(f"\n--- fit A (OFFICIAL protocol): {', '.join(FREE)} free ---")
     res_a = multi_fit(data)
     report(res_a, data, "diode fit A, all 30 points")
 
@@ -266,7 +298,8 @@ def main() -> None:
     print(f"record RMSE {ST8L65_DIODE_RMSE_REL * 100:.2f} % | this run "
           f"{res_a.rmse_rel * 100:.2f} %")
 
-    for txt in (kn_sweep_probe(data), free_kn_probe(data), mechanism_probes(data, res_a.params)):
+    for txt in (kn_sweep_probe(data), free_kn_probe(data),
+                mechanism_probes(data, res_a.params), tc_off_probe(data, res_a.params)):
         print(txt)
         probe.append(txt)
 
@@ -281,9 +314,12 @@ def main() -> None:
                      "k_n fixed at 2.0 (physical diffusion limit; freeing it buys ~0.1 %, "
                      "lands at k_n=2.07 with corr(i_s,k_n)=+1.000 -- see probe).\n"
                      "i_s is only meaningful paired with k_n (sigma_rel ~ 1: no low-current "
-                     "tail in the data). v_eg ~ 1.1 eV = silicon bandgap, sensed.\n"
+                     "tail in the data). v_eg ~ 1.09 eV = silicon bandgap, sensed.\n"
                      "r_diode is the diode-path series resistance; the diode bypasses r_d/r_s.\n"
-                     "r_diode <-> i_kf corr +0.95: quote the curve, not the split.\n")
+                     "r_diode <-> i_kf corr +0.95: quote the curve, not the split.\n"
+                     "a_ikf/a_rdiode: LTspice Tikf/Trs1 linear TCs (Tnom-referenced, "
+                     "LTspice-verified); TC-off fit A is 4.78 % -- the TCs are the "
+                     "best-sensed diode parameters after r_diode.\n")
     print(f"wrote {txt}")
 
     probe_file = OUT / "st8l65_diode_probe.txt"

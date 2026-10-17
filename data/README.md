@@ -94,7 +94,8 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   source → drain, `v_sd = −v_ds` in the model's drain-referenced convention.
 - **Identifiability limit to remember:** the data starts at 5 A — there is
   **no low-current tail**, so the saturation prefactors (i_s, and i_sr even
-  more) are weakly determined; only the (k_n, i_s) pair, r_diode, i_kf and
-  v_eg reproduce the curves. The temperature law (Xti/Eg) IS pinned by the
-  three temperatures (v_eg ≈ 1.10 eV ≈ silicon). Fit protocol:
+  more) are weakly determined; only the (k_n, i_s) pair, r_diode, i_kf,
+  v_eg and the Tikf/Trs1 temperature coefficients (a_ikf, a_rdiode) reproduce
+  the curves. The temperature law (Xti/Eg) IS pinned by the
+  three temperatures (v_eg ≈ 1.09 eV ≈ silicon). Fit protocol:
   `scripts/fit_st8l65_diode.py`.

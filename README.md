@@ -199,6 +199,8 @@ i_diffuse = i_s(T)·[exp(v_di/(k_n·v_therm)) − 1] / sqrt(1 + i_s(T)/i_kf·[ex
 i_recomb  = i_sr(T)·[exp(v_di/(k_nr·v_therm)) − 1]
 i_s(T)  = i_s ·(T/T_nom)^(k_xti/k_n) ·exp[(v_eg·q/k_B/k_n)·(1/T_nom − 1/T)]
           (same law for i_sr(T), divisor k_nr)
+i_kf(T)    = i_kf·(1 + a_ikf·(T − T_nom))          (LTspice Tikf law)
+r_diode(T) = r_diode·(1 + a_rdiode·(T − T_nom))    (LTspice Trs1 law)
 ```
 
 Sign convention: `v_sd = −v_ds`, anode = source (N-FET); positive i_di flows
@@ -206,11 +208,13 @@ source → drain. The diode CSV keeps the datasheet source-referenced spelling
 (`I_sd,v_sd,T`); the conversion lives in the model/fitter.
 
 LTspice mapping: `Is→i_s  N→k_n  Isr→i_sr  Nr→k_nr  Ikf→i_kf  Rs→r_diode
-Tnom→t_nom  Xti→k_xti  Eg→v_eg`. Capacitance (Cjo/Vj/M), transit time,
-breakdown (BV/Ibv) and noise are out of scope; instance multiplicity (`m=`)
+Tnom→t_nom  Xti→k_xti  Eg→v_eg  Tikf→a_ikf  Trs1→a_rdiode`. Capacitance
+(Cjo/Vj/M), transit time, breakdown (BV/Ibv) and noise are out of scope;
+instance multiplicity (`m=`)
 is a wiring-level parallel-device count, not a model parameter (the
 model-card `M` is the junction grading coefficient — capacitance only), so
-`M = 1` here.
+`M = 1` here. The quadratic `Trs2` is deliberately not modelled (names.xlsx
+stops at Trs1).
 
 Verified against LTspice 26.0.1 (`.dc`/`.step temp`/`.meas` probes, pinned by
 `tests/test_diode.py::test_ltspice_cross_validation`):
@@ -224,7 +228,12 @@ Verified against LTspice 26.0.1 (`.dc`/`.step temp`/`.meas` probes, pinned by
   (V-dependent, exactly linear in Isr — an implementation quirk). We
   implement the *documented* form; the cross-validation test covers the
   diffusion + Ikf + temperature terms only, and the ST8L65 data lives at
-  0.56–1.05 V where i_sr is unsensed anyway.
+  0.56–1.05 V where i_sr is unsensed anyway;
+- the linear TC laws are exactly `X(T) = X·(1 + TC·(T − Tnom))`, referenced
+  to **Tnom** (not 27 °C): a `Tikf=0.006 Trs1=0.008` probe matches to ~1e-5
+  relative at −55/25/100 °C × 0.6/0.9 V; a 27 °C-referenced variant misses
+  by 0.2–0.6 %, TC-off by up to 25 %
+  (`test_diode.py::test_ltspice_tc_laws`).
 
 Channel for `v_ds ≤ 0` is **0**: the channel formulation is forward-polarity
 only (odd k_db, singular velocity divisor). All reverse current is diode
@@ -238,15 +247,29 @@ Sentinels: `i_s = i_sr = 0` (the default) → diode current exactly 0 →
 reverse saturation is physically unaffected by high-level injection. "Off"
 is reached by leaving the parameter out of the free set, never by driving it
 to the lower bound (bounds start at 1e-22 A / 1e-3 A for that reason).
+`a_ikf = a_rdiode = 0` (the defaults, LTspice's own defaults) → no
+temperature dependence, bit-identical to the pre-TC model; the TCs act on
+i_kf/r_diode only, never on the Xti/Eg law. TC bounds (−0.005, +0.05)/°C
+keep the linear factor positive across −55…150 °C; outside that range the
+factor is clamped at a tiny floor so the solver bracket proof survives
+absurd extrapolation temperatures.
 
 Extraction: `fit_diode()` on `DiodeCurveSet` (multi-temperature, per-point
 temperature). The free set IS the protocol — see `scripts/fit_st8l65_diode.py`
 and STATUS, "Current ST8L65 diode fit": k_n fixed at 2.0 from physics,
-i_kf/v_eg/r_diode free, i_sr off (unsensed).
+i_kf/v_eg/r_diode + both TCs free, i_sr off (unsensed). **Session 14
+promotion:** the official record is the 6-param TC fit — 4.15 %
+(−55 °C 2.26, 25 °C 3.41, 150 °C 5.90), rank 6/6, and the TCs are the
+*best-sensed* diode parameters after r_diode: a_rdiode = +0.34 %/°C
+(σ_rel 0.019, silicon-like), a_ikf = +0.54 %/°C (σ_rel 0.028). TC-off
+(the session-12 record, 4.78 %) lives on as the script's `tc_off_probe`.
 
 ## Project status
 
-Twelve sessions, all committed to `main`. The package provides one C¹ continuous
+Fourteen sessions, all committed to `main` (session 13 closed the body-diode
+pending list; session 14 added the diode temperature coefficients
+`a_ikf`/`a_rdiode` and promoted the TC fit to the official record). The
+package provides one C¹ continuous
 drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
 package r_d/r_s, **plus the body diode** (LTspice diode DC branch with
@@ -260,8 +283,9 @@ the subthreshold curve) — the off state is now the gate-dependent softplus
 floor (plus the diode's reverse saturation when the diode is on). Current
 **official** fits on ST8L65N044M9: channel **3.79 % relative RMSE
 (fit A, 10-param with `k_kneesharp` free, full 41-point set), Jacobian rank 8/10,
-cond 2.19e3**; diode **4.78 % on 30 points (−55/25/150 °C), rank 4/4, v_eg =
-1.097 eV ≈ silicon bandgap**, 120 tests green. `k_lambda`/`v_dbsat` report σ = inf because the data
+cond 2.19e3**; diode **4.15 % on 30 points (−55/25/150 °C), rank 6/6, v_eg =
+1.088 eV ≈ silicon bandgap, TCs a_ikf = +0.54 %/°C / a_rdiode = +0.34 %/°C**,
+127 tests green (TC-off baseline: 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
 not a fit failure. Remaining gaps: Q(V), HV
 leakage, thermal node, LTspice export — details and open problems in
@@ -296,7 +320,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 120 tests green (digitizer Tk window tests self-skip headless)
+pytest                            # 127 tests green (digitizer Tk window tests self-skip headless)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
