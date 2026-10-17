@@ -71,8 +71,8 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarra
         the intrinsic fast path (bit-identical to the pre-package-R model).
     t_c : float
         Device temperature [degC] for the diode branch (ignored when the
-        diode is off; drives the i_s(T)/i_sr(T) Xti/Eg law and the Tikf/Trs1
-        linear TCs of i_kf/r_diode; the future Tj node supersedes it).
+        diode is off; drives the i_s(T)/i_sr(T) Xti/Eg law and the Tikf/Trs1/
+        Trs2 TCs of i_kf/r_diode; the future Tj node supersedes it).
 
     Returns
     -------

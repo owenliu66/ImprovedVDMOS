@@ -1,13 +1,13 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-17 (session 14 — diode temperature coefficients a_ikf /
-a_rdiode (LTspice Tikf/Trs1), TC probe 4.15 %; session 13 closed session
-12's pending list). Companion to
+*Snapshot: 2026-10-17 (session 15 — Trs2 quadratic r_diode TC b_rdiode,
+LTspice-exact; probe shows the 150 °C residual is a 5 A digitization point,
+not Rs curvature; session 14 promoted the TC record). Companion to
 [README.md](../../README.md).*
 
 ## Current state
 
-Fourteen sessions, all committed to `main` (session 11 renamed every parameter
+Fifteen sessions, all committed to `main` (session 11 renamed every parameter
 to the `<type prefix>_<suffix>` convention — names.xlsx + README "Naming
 convention" are the mapping, tag `pre-rename-2026-10` is the escape hatch, and
 the rename is bit-identical; session 12 added the **body diode** —
@@ -18,7 +18,14 @@ fixes, headless LTspice batch-mode verification, docs). Session 14 added the
 diode **linear temperature coefficients** `a_ikf`/`a_rdiode` (LTspice
 Tikf/Trs1, Tnom-referenced, verified to ~1e-5 against LTspice 26.0.1;
 TC=0 default is bit-identical to session 12) and **promoted the 6-param TC
-fit (4.15 %) to the official record**.
+fit (4.15 %) to the official record**. Session 15 added the **quadratic
+r_diode TC `b_rdiode`** (LTspice Trs2 — completing the exact LTspice Rs law,
+probed to ~1e-5 at −55/25/100/150 °C) and **promoted the 7-param TC+Trs2 fit
+(3.91 %) to the official record (user override)**. The promotion caveats are
+recorded in the Trs2 section below: the gain over the linear-TC record is
+modest (4.15 → 3.91 %), the five-knob TC/knee block is strongly correlated
+(|corr| up to 0.985), and the stubborn 150 °C residual is a ~12 mV
+digitization error on the 5 A point, not missing series-R physics.
 The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (v_ovmax, k_ovsharp),
 mobility degradation via v_knee, velocity saturation, bounded DIBL, gated CLM,
@@ -72,8 +79,8 @@ Projects/ImprovedVDMOS/
   degradation via v_knee, velocity saturation, DIBL, gated CLM, one-sided kink
   sigmoid), embedded with package series resistance r_d/r_s, minus the body
   diode `vdmos_diode()` (LTspice diode DC branch: diffusion + high-injection
-  compression + recombination + r_diode + Xti/Eg temperature law + linear
-  Tikf/Trs1 temperature coefficients on i_kf/r_diode), wired at
+  compression + recombination + r_diode + Xti/Eg temperature law + LTspice
+  Tikf/Trs1/Trs2 temperature coefficients on i_kf/r_diode), wired at
   the terminals and bypassing r_d/r_s. No drift-leakage term: the off state
   is the gate-dependent softplus floor (channel) plus the diode reverse
   saturation when the diode is on.
@@ -97,7 +104,7 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **127 tests, all passing** (1 Tk digitizer window test self-skipped in the
+- **128 tests, all passing** (2 Tk digitizer window tests self-skipped in the
   last full run); `ruff check` clean. Caveat: 8 of the digitizer
   window tests drive Tk and self-skip when the process has no display — in
   headless runs 0–2 of them skip (flaky per-process), so "N passed, M skipped"
@@ -114,11 +121,14 @@ Projects/ImprovedVDMOS/
   `vdmos_id` is bit-identical to the pre-diode model on the v_ds ≥ 0 grid
   (fast path and package-R path both pinned).
 - **Diode TC laws verified against LTspice 26.0.1**
-  (`test_diode.py::test_ltspice_tc_laws`): Tikf/Trs1 are LINEAR and
-  **Tnom-referenced** — agreement ~1e-5 relative at −55/25/100 °C ×
-  0.6/0.9 V; a 27 °C-referenced variant is excluded (0.2–0.6 % off), TC-off
-  excluded (up to 25 %). TC=0 default is bit-identical to the session-12
-  model; TC round trip recovers a_ikf/a_rdiode exactly (rank 6/6); the
+  (`test_diode.py::test_ltspice_tc_laws`): Tikf linear and Trs1+Trs2
+  quadratic, all **Tnom-referenced** — agreement ~1e-5 relative at
+  −55/25/100/150 °C × 0.6/0.9 V; a 27 °C-referenced variant is excluded
+  (0.1–0.6 % off), TC-off excluded (up to 25 %), linear-only excluded
+  (up to 10.6 % at 150 °C). TC=0 default is bit-identical to the session-12
+  model; TC round trip recovers a_ikf/a_rdiode/b_rdiode exactly (unit-column
+  SVD rank 7/7; identifiability's raw mixed-unit report says 6/7 -- a
+  tolerance artifact, see the Trs2 section); the
   extrapolation clamp keeps r_diode/i_kf positive at absurd temperatures.
 - All model anchors hold (r_d = r_s = 0 and v_ovmax = 0 fast paths are
   bit-identical to the pre-package-R / pre-cap model):
@@ -280,33 +290,35 @@ Findings:
 - v_sub got worse as a one-point artifact (0.243 V ≈ 560 mV/dec). Queue 1
   (digitise a near-threshold transfer curve) is now the top data priority.
 
-## Current ST8L65 diode fit — OFFICIAL: fit A (6 free params incl. TCs, session 14)
+## Current ST8L65 diode fit — OFFICIAL: fit A (7 free params incl. all three TCs, session 15)
 
 `scripts/fit_st8l65_diode.py` fit A; outputs `out/st8l65_diode_params.txt`,
 `out/st8l65_diode_probe.txt`, `out/st8l65_diode_fit.png`. Record in
 `vdmos_fit.reference.ST8L65_DIODE`, drift-checked by the script
-(`OFFICIAL_TOL`, 2.3e-6 [OK] at promotion) and pinned by
+(`OFFICIAL_TOL`, 3.8e-5 [OK] at promotion) and pinned by
 `tests/test_diode.py::test_st8l65_diode_record_reproduces`
-(RMSE < 4.3 %, per-temperature < 7 %, r_diode interior, reverse floor < 10 µA,
-v_eg in (0.9, 1.3) eV, TCs interior and positive).
+(RMSE < 4.0 %, per-temperature < 7 %, r_diode interior, reverse floor < 10 µA,
+v_eg in (0.9, 1.3) eV, TCs interior — linear ones positive, b_rdiode negative).
 
 Data: `data/ST8L65N044M9_diode.csv` — 30 points, I_sd 5–55 A at −55/25/150 °C.
-Free = i_s, r_diode, v_eg, i_kf, **a_ikf, a_rdiode** (TCs promoted session 14 —
-see the TC section below); **k_n fixed 2.0** (physical diffusion limit),
+Free = i_s, r_diode, v_eg, i_kf, a_ikf, a_rdiode, **b_rdiode** (Trs2 promoted
+session 15 — see the TC section below); **k_n fixed 2.0** (physical diffusion
+limit),
 k_xti fixed 3.0 (LTspice default), i_sr = 0, t_nom = 25 °C; device bound
 r_diode ≤ 20 mΩ. Four multi-starts, all converge to the same basin.
 
 | | fit A (OFFICIAL, 30 pts) |
 |---|---|
-| RMSE_rel | **4.15 %** (−55 °C 2.26, 25 °C 3.41, 150 °C 5.90) |
-| i_s | 3.835e-6 A (σ_rel 1.09 — weak prefactor, pair with k_n) |
-| r_diode | 1.497 mΩ (σ_rel 0.005) |
-| v_eg | 1.0881 eV (σ_rel 0.16 — silicon bandgap, sensed) |
-| i_kf | 15.63 A (σ_rel 5.9; r_diode↔i_kf corr +0.953) |
-| a_ikf | +0.00545 /°C (σ_rel 0.028) |
-| a_rdiode | +0.00341 /°C (σ_rel 0.019) |
-| rank / cond | **6/6** / 7.12e3 |
-| reverse floor (−1 V, 25 °C) | 3.8 µA |
+| RMSE_rel | **3.91 %** (−55 °C 2.37, 25 °C 3.16, 150 °C 5.49) |
+| i_s | 3.851e-6 A (σ_rel 1.11 — weak prefactor, pair with k_n) |
+| r_diode | 1.896 mΩ (σ_rel 0.013) |
+| v_eg | 1.0820 eV (σ_rel 0.18 — silicon bandgap, sensed) |
+| i_kf | 21.97 A (σ_rel 15.4; r_diode↔i_kf corr +0.985) |
+| a_ikf | +0.00832 /°C (σ_rel 0.059) |
+| a_rdiode | +0.00483 /°C (σ_rel 0.022) |
+| b_rdiode | −1.78e-5 /°C² (σ_rel 0.0003 — NOT quotable, see TC section) |
+| rank / cond (as reported) | 6/7* / 1.64e4 |
+| reverse floor (−1 V, 25 °C) | 3.9 µA |
 
 Findings / protocol decisions:
 
@@ -336,15 +348,17 @@ Findings / protocol decisions:
   r_diode ≤ 20 mΩ bound (measured dV/dI is 3.4–11.7 mΩ) excludes the
   runaway even so.
 
-## Diode temperature coefficients (session 14) — PROMOTED to the official record
+## Diode temperature coefficients (sessions 14–15) — all three TCs promoted to the official record
 
-`a_ikf` (LTspice **Tikf**) and `a_rdiode` (LTspice **Trs1**): linear per-°C
-laws `X(T) = X·(1 + a·(T − t_nom))`, Tnom-referenced — the exact LTspice
-form, pinned by `test_diode.py::test_ltspice_tc_laws`. Defaults 0 = off =
-bit-identical to the session-12 model; bounds (−0.005, +0.05) /°C keep the
-linear factor positive across −55…150 °C (worst 0.375), with a tiny clamp
-floor beyond so the solver bracket proof survives absurd extrapolation.
-`Trs2` (quadratic) deliberately not modelled — names.xlsx stops at Trs1.
+`a_ikf` (LTspice **Tikf**), `a_rdiode` (**Trs1**) and `b_rdiode` (**Trs2**,
+session 15): the exact LTspice laws `i_kf(T) = i_kf·(1 + a_ikf·(T − t_nom))`
+and `r_diode(T) = r_diode·(1 + a_rdiode·(T − t_nom) + b_rdiode·(T − t_nom)²)`,
+Tnom-referenced — pinned by `test_diode.py::test_ltspice_tc_laws` (~1e-5 at
+−55/25/100/150 °C; linear-only misses up to 10.6 % at 150 °C, proving the
+Trs2 term is real LTspice behavior). Defaults 0 = off =
+bit-identical to the session-12 model; bounds (−0.005, +0.05) /°C and
+(−1e-4, +1e-3) /°C², with a tiny clamp floor so the solver bracket proof
+survives absurd extrapolation.
 
 TC probe on the measured CSV (`scripts/fit_st8l65_diode.py`):
 
@@ -373,6 +387,51 @@ Findings:
   per-T < 7 %, TCs asserted interior and positive. The TC-off protocol lives
   on as the script's `tc_off_probe` (reproduces 4.78 %) and as the
   session-12 baseline quoted above.
+
+### Trs2 promotion (session 15) — user override, with the caveats on record
+
+User flag: "the improvement isn't as large as expected, especially the
+150 °C branch" — probing `b_rdiode` free on top of the 6-param record
+(four starts one basin), then **promoted on the user's explicit decision
+(2026-10-17)** despite the modest gain:
+
+| | record (6-param, b=0) | + b_rdiode (7-param) |
+|---|---|---|
+| RMSE_rel | 4.15 % | 3.91 % |
+| −55 / 25 / 150 °C rms | 2.26 / 3.41 / 5.90 % | 2.37 / 3.16 / 5.49 % |
+| rank / cond (as reported) | 6/6 / 7.12e3 | 6/7* / 1.64e4 |
+| b_rdiode | 0 (fixed) | −1.78e-5 /°C² (a_rdiode +0.48 %/°C) |
+
+\* **rank 6/7 is a tolerance artifact**: `b_rdiode`'s Jacobian column carries
+the dT² scale (norm ~1.9e4 vs ~2 for i_kf), inflating identifiability's
+relative dead-column cutoff; with unit-column scaling the SVD is full rank
+7/7 (smallest singular value 3.6e-2 of max).
+
+Caveats that came with the promotion (why the record must be quoted as a
+curve, not as parameters):
+
+- **Correlated five-knob block**: r_diode/i_kf/a_ikf/a_rdiode/b_rdiode are
+  strongly entangled on three temperatures (|corr| up to 0.985; σ(i_kf)
+  blows from 5.9 to 15.4) — the record would quote an untrustworthy split
+  (b_rdiode's apparent σ_rel = 0.0003 is pinv along the near-degenerate
+  direction, not real information).
+- **The 150 °C residual is not series-R curvature**: it is dominated by the
+  5 A point (+13…15 %). The digitized v_sd there (0.562 V) sits ~12 mV above
+  what any smooth fit wants — in the exponential region, where r_diode·i_di
+  is only ~10 mV of the 562 mV drop, so NO Rs TC (Trs1 or Trs2) can move it.
+  Excluding that one point, 150 °C rms is 3.85 % (record) / 3.76 % (Trs2
+  fit) — the curves agree once the digitization edge point is out. The 5 A
+  point at 25 °C is off the other way (−6 mV): the leftmost digitized point
+  of each curve is the data's weak spot, not the model.
+- The recombination branch was probed too (it is the physical candidate for
+  low-current/high-T bending): 3.50 % overall but σ(i_sr) = 645 (unsensed),
+  rank 7/9, and the 5 A/150 °C point stays +11.7 % — same verdict: keep off.
+
+Promotion bookkeeping: drift check 3.8e-5 [OK] (four multi-starts, all 3.91 %
+one basin); pinned-test bound 0.043 → **0.040** (between the 3.91 % record
+and the 4.15 % linear-TC baseline); `trs2_off_probe` (b_rdiode pinned 0)
+reproduces the session-14 4.15 % protocol as the standing baseline, next to
+`tc_off_probe` (4.78 %, session 12).
 
 ## Open problems
 

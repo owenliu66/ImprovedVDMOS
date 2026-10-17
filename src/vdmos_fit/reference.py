@@ -68,50 +68,54 @@ ST8L65_OFFICIAL = Params(
 )
 
 # ---------------------------------------------------------------------------
-# Body diode (session 12, TCs promoted session 14): fit A of
-# ``scripts/fit_st8l65_diode.py`` -- free i_s, r_diode, v_eg, i_kf, a_ikf,
-# a_rdiode on all 30 points of data/ST8L65N044M9_diode.csv
+# Body diode (session 12; TCs promoted session 14; Trs2 promoted session 15):
+# fit A of ``scripts/fit_st8l65_diode.py`` -- free i_s, r_diode, v_eg, i_kf,
+# a_ikf, a_rdiode, b_rdiode on all 30 points of data/ST8L65N044M9_diode.csv
 # (-55/25/150 degC, 5-55 A). k_n FIXED at 2.0 (physical diffusion limit --
-# freeing it buys ~0.1 % RMSE, lands at k_n = 2.07 with corr(i_s, k_n) =
-# +1.000, and drifts the reverse-blocking floor: the ideality/prefactor
+# freeing it buys ~1 % RMSE, lands at k_n ~ 1.3-2.1 depending on the TC set
+# (the valley direction moves), with corr(i_s, k_n) ~ +1.0, and drifts the
+# reverse-blocking floor by orders of magnitude: the ideality/prefactor
 # split is a degenerate valley, so k_n comes from physics, not this data),
 # k_xti fixed at 3.0 (LTspice default; freeing it gains 0.04 % and pins
 # k_xti <-> v_eg at -0.99), i_sr = 0 (recombination branch unsensed above 5 A).
 #
-# a_ikf/a_rdiode are the LTspice Tikf/Trs1 LINEAR temperature coefficients
-# (Tnom-referenced, verified to ~1e-5 against LTspice 26.0.1 --
-# test_diode.py::test_ltspice_tc_laws). Promoted 2026-10-17: TC-off fit A
-# (the session-12 record) sits at 4.78 %; freeing both TCs lands at 4.15 %
-# (per-T rms 2.26/3.41/5.90 vs 3.40/3.85/6.49), four multi-starts one basin,
-# rank 6/6 cond 7.12e3, nothing pinned. The TCs are the best-sensed diode
-# parameters after r_diode (sigma_rel 0.019/0.028) and physical: a_rdiode =
-# +0.34 %/degC (silicon-ish series R), a_ikf = +0.54 %/degC (the
-# high-injection knee rises with T).
+# a_ikf/a_rdiode/b_rdiode are the LTspice Tikf/Trs1/Trs2 temperature
+# coefficients (Tnom-referenced, verified to ~1e-5 against LTspice 26.0.1 --
+# test_diode.py::test_ltspice_tc_laws). Promotion history: TC-off fit A
+# (session 12) 4.78 % -> linear TCs (session 14) 4.15 % -> + Trs2 quadratic
+# (session 15, user override) 3.91 %. The Trs2 gain is modest and the
+# five-knob r_diode/i_kf/a_ikf/a_rdiode/b_rdiode block is STRONGLY correlated
+# (|corr| up to 0.985, sigma_rel(i_kf) ~ 15): quote the CURVE, never the
+# split. The stubborn 150 degC residual is a ~12 mV digitization error on
+# the 5 A point (exponential region -- r_diode carries only ~10 mV of the
+# 562 mV drop), not missing series-R physics; excluding that point the
+# 150 degC rms is ~3.8 % for both the 6- and 7-param fits. Baselines live on
+# as script probes: tc_off_probe 4.78 %, trs2_off_probe 4.15 %.
 #
 # i_s is weakly determined (sigma_rel ~ 1.1 -- a pure exponential prefactor,
 # no low-current tail in the data) and only meaningful as the PAIR with k_n
-# that reproduces the curve; v_eg ~ 1.09 eV (silicon bandgap) is genuinely
-# sensed (sigma_rel ~ 0.16) and r_diode ~ 1.5 mOhm is the diode-path series
-# resistance (the diode bypasses the package r_d/r_s). r_diode <-> i_kf
-# correlation +0.95: quote the curve, not the split.
+# that reproduces the curve; v_eg ~ 1.08 eV (silicon bandgap) is genuinely
+# sensed (sigma_rel ~ 0.18) and r_diode ~ 1.9 mOhm is the diode-path series
+# resistance (the diode bypasses the package r_d/r_s).
 # ---------------------------------------------------------------------------
 
 ST8L65_DIODE_FREE: tuple[str, ...] = (
-    "i_s", "r_diode", "v_eg", "i_kf", "a_ikf", "a_rdiode",
+    "i_s", "r_diode", "v_eg", "i_kf", "a_ikf", "a_rdiode", "b_rdiode",
 )
 
-ST8L65_DIODE_RMSE_REL = 0.0415
+ST8L65_DIODE_RMSE_REL = 0.0391
 
 ST8L65_DIODE = Params(
-    i_s=3.83498e-06,
+    i_s=3.85056e-06,
     k_n=2.0,
     i_sr=0.0,
     k_nr=2.0,
-    i_kf=15.6344,
-    a_ikf=0.00544705,
-    r_diode=0.00149732,
-    a_rdiode=0.00341287,
+    i_kf=21.9663,
+    a_ikf=0.00832096,
+    r_diode=0.00189604,
+    a_rdiode=0.00483208,
+    b_rdiode=-1.78406e-05,
     t_nom=25.0,
     k_xti=3.0,
-    v_eg=1.08815,
+    v_eg=1.08196,
 )

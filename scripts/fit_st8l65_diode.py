@@ -5,22 +5,36 @@ Data: data/ST8L65N044M9_diode.csv -- 30 points, I_sd 5-55 A at -55/25/150 degC
 
 PROTOCOL (locked after the probe campaign, README "Body diode"):
 
-  * Fit A (OFFICIAL, session 14): free = i_s, r_diode, v_eg, i_kf, a_ikf,
-    a_rdiode; k_n FIXED at 2.0 (physical diffusion limit), k_xti fixed at
-    3.0 (LTspice default), i_sr = 0. Four multi-starts, r_diode capped at
-    20 mOhm (DEVICE_BOUNDS). RMSE 4.15 %.
-  * Why the TCs (a_ikf/a_rdiode, LTspice Tikf/Trs1 linear laws) are in the
-    primary set: TC-off fit A (the session-12 record) sits at 4.78 %; the
-    TCs are the best-sensed diode parameters after r_diode (sigma_rel
-    0.019/0.028), interior, one basin across starts.
-  * Why k_n fixed: freeing it buys ~0.1 % RMSE, lands at k_n = 2.07 with
-    corr(i_s, k_n) = +1.000 (the ideality/prefactor split is a degenerate
-    valley -- only the PAIR is pinned), and drifts the reverse-blocking
-    floor. Fix k_n from physics (diffusion limit ~2), not from this data.
+  * Fit A (OFFICIAL, session 15): free = i_s, r_diode, v_eg, i_kf, a_ikf,
+    a_rdiode, b_rdiode; k_n FIXED at 2.0 (physical diffusion limit), k_xti
+    fixed at 3.0 (LTspice default), i_sr = 0. Four multi-starts, r_diode
+    capped at 20 mOhm (DEVICE_BOUNDS). RMSE 3.91 %.
+  * Why the TCs (a_ikf/a_rdiode/b_rdiode, LTspice Tikf/Trs1/Trs2 laws) are
+    in the primary set: TC-off fit A (session-12 record) sits at 4.78 %,
+    linear-TC-only (session-14 record) at 4.15 %. The Trs2 promotion was a
+    deliberate user override: the gain is modest and the five-knob
+    r_diode/i_kf/a_ikf/a_rdiode/b_rdiode block is strongly correlated
+    (|corr| up to 0.985, sigma(i_kf) 15) -- quote the CURVE, never the
+    split. The stubborn 150 degC residual is a ~12 mV digitization error on
+    the 5 A point (exponential region -- r_diode carries only ~10 mV of the
+    562 mV drop), not missing series-R physics; excluding that point the
+    150 degC rms is ~3.8 % for both the 6- and 7-param fits.
+    (identifiability prints rank 6/7: an artifact of b_rdiode's ~1e4 column
+    norm inflating the relative dead tolerance; unit-column SVD is 7/7.)
+    Baselines live on as probes: tc_off_probe reproduces 4.78 % (session
+    12), trs2_off_probe reproduces 4.15 % (session 14).
+  * Why k_n fixed: freeing it buys ~1 % RMSE and lands at k_n ~ 1.3-2.1
+    (the valley's direction moves with the TCs) with corr(i_s, k_n) ~ +1.0
+    and a reverse-blocking floor that drifts by ORDERS of magnitude -- the
+    ideality/prefactor split is a degenerate valley. Fix k_n from physics
+    (diffusion limit ~2), not from this data.
   * Why i_kf in the primary set: with i_kf pinned off (sentinel 0.0) the fit
     degrades badly. The high-injection knee carries real curvature in the
     5-55 A range.
   * i_sr/k_nr stay off: freeing them changes nothing (unsensed above 5 A).
+  * Trs2 (b_rdiode, quadratic r_diode TC) promoted session 15 (user
+    override): see the Fit A bullet above for the caveats. See trs2_off_probe
+    for the 4.15 % linear-TC baseline.
   * i_s is only meaningful PAIRED with k_n: the data has no low-current tail,
     so sigma_rel(i_s) ~ 1 (order of magnitude). Quote the curve, not i_s.
 
@@ -86,11 +100,14 @@ START = Params(
 DEVICE_BOUNDS = {"r_diode": (0.0, 0.020)}
 
 MULTI_START = [
-    dict(i_s=1e-8, r_diode=0.002, v_eg=1.11, i_kf=20.0, a_ikf=0.0, a_rdiode=0.0),
-    dict(i_s=1e-6, r_diode=0.005, v_eg=1.20, i_kf=1.0, a_ikf=0.004, a_rdiode=0.004),
+    dict(i_s=1e-8, r_diode=0.002, v_eg=1.11, i_kf=20.0,
+         a_ikf=0.0, a_rdiode=0.0, b_rdiode=0.0),
+    dict(i_s=1e-6, r_diode=0.005, v_eg=1.20, i_kf=1.0,
+         a_ikf=0.004, a_rdiode=0.004, b_rdiode=2e-5),
     dict(i_s=1e-12, r_diode=0.0005, v_eg=0.30, i_kf=1e4,
-         a_ikf=-0.002, a_rdiode=0.010),
-    dict(i_s=1e-4, r_diode=0.001, v_eg=1.10, i_kf=50.0, a_ikf=0.010, a_rdiode=0.001),
+         a_ikf=-0.002, a_rdiode=0.010, b_rdiode=-2e-5),
+    dict(i_s=1e-4, r_diode=0.001, v_eg=1.10, i_kf=50.0,
+         a_ikf=0.010, a_rdiode=0.001, b_rdiode=1e-4),
 ]
 
 
@@ -104,6 +121,7 @@ def multi_fit(data: DiodeCurveSet, free=FREE, base=START) -> FitResult:
         print(f"    start i_s={s['i_s']:8.3g} r_diode={s['r_diode']*1e3:6.3g}m"
               f" v_eg={s['v_eg']:6.3g} i_kf={s['i_kf']:8.3g}"
               f" a=({s['a_ikf']:+.3f},{s['a_rdiode']:+.3f})"
+              f" b={s['b_rdiode']:+.1e}"
               f" -> RMSE {res.rmse_rel * 100:6.2f} %"
               + ("" if res.success else "   [stopped]"))
         if best is None or res.rmse_rel < best.rmse_rel:
@@ -239,6 +257,30 @@ def tc_off_probe(data: DiodeCurveSet, p_a: Params) -> str:
     return "\n".join(lines)
 
 
+def trs2_off_probe(data: DiodeCurveSet, p_a: Params) -> str:
+    """b_rdiode pinned at 0 (the session-14 linear-TC record protocol): the
+    Trs2 baseline. Reproduces 4.15 %; the promoted 7-param fit A gains
+    ~0.24 % absolute on top of it.
+    """
+    lines = ["", "Trs2-off probe (fit A minus b_rdiode -- the session-14 "
+                  "linear-TC record protocol):"]
+    free = tuple(n for n in FREE if n != "b_rdiode")
+    res = fit_diode(data, start=p_a.replace(b_rdiode=0.0), free=free,
+                    weight="relative", max_nfev=8000,
+                    bounds_overrides=DEVICE_BOUNDS)
+    model = vdmos_diode(data.v_sd, res.params, t_c=data.temp_c)
+    rel = (model - data.i_sd) / data.i_sd
+    per_t = "  ".join(
+        f"{t:+.0f}C {np.sqrt(np.mean(rel[np.isclose(data.temp_c, t)] ** 2)) * 100:.2f}%"
+        for t in data.temp_grid())
+    lines.append(
+        f"  b_rdiode pinned 0: RMSE {res.rmse_rel * 100:.2f} % | per-T rms: {per_t}"
+        "  <- session-14 baseline; Trs2 gain is modest (5 A/150 C point is "
+        "digitization, not Rs curvature)"
+    )
+    return "\n".join(lines)
+
+
 def plot(data: DiodeCurveSet, p: Params, path: Path) -> None:
     """Left: measured points + fit curves at the three temperatures.
     Right: relative residuals vs i_sd, one marker per temperature."""
@@ -299,7 +341,8 @@ def main() -> None:
           f"{res_a.rmse_rel * 100:.2f} %")
 
     for txt in (kn_sweep_probe(data), free_kn_probe(data),
-                mechanism_probes(data, res_a.params), tc_off_probe(data, res_a.params)):
+                mechanism_probes(data, res_a.params), tc_off_probe(data, res_a.params),
+                trs2_off_probe(data, res_a.params)):
         print(txt)
         probe.append(txt)
 
@@ -317,9 +360,11 @@ def main() -> None:
                      "tail in the data). v_eg ~ 1.09 eV = silicon bandgap, sensed.\n"
                      "r_diode is the diode-path series resistance; the diode bypasses r_d/r_s.\n"
                      "r_diode <-> i_kf corr +0.95: quote the curve, not the split.\n"
-                     "a_ikf/a_rdiode: LTspice Tikf/Trs1 linear TCs (Tnom-referenced, "
-                     "LTspice-verified); TC-off fit A is 4.78 % -- the TCs are the "
-                     "best-sensed diode parameters after r_diode.\n")
+                     "a_ikf/a_rdiode/b_rdiode: LTspice Tikf/Trs1/Trs2 TCs (Tnom-"
+                     "referenced, LTspice-verified); baselines: TC-off 4.78 %, "
+                     "linear-TC-only 4.15 %. The five-knob TC/knee block is "
+                     "strongly correlated (|corr| up to 0.985) -- quote the "
+                     "curve, never the split.\n")
     print(f"wrote {txt}")
 
     probe_file = OUT / "st8l65_diode_probe.txt"
