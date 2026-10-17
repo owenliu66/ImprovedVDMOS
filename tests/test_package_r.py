@@ -136,13 +136,22 @@ def test_level1_package_embedding_fair_comparison():
 
 
 # ---------------------------------------------------------------- guards
-def test_negative_vds_with_package_r_raises():
-    """Channel-only model has no defined reverse characteristic -- fail loudly."""
+def test_negative_vds_channel_solver_still_guarded():
+    """The channel solver keeps its v_ds >= 0 guard -- but vdmos_id no longer
+    needs it: the body diode (session 12) defines the reverse characteristic.
+    vdmos_id_level1 (no diode) still fails loudly.
+    """
+    from vdmos_fit.model import _channel_current, _solve_package_r
+
     p = DEFAULT.replace(r_d=2e-3, r_s=1e-3)
+    z = np.zeros(1)
     with pytest.raises(ValueError, match="v_ds >= 0"):
-        vdmos_id(np.linspace(-5.0, 5.0, 11), 10.0, p)
+        _solve_package_r(z - 1.0, z + 5.0, p.r_d, p.r_s,
+                         lambda d, g: _channel_current(d, g, p))
     with pytest.raises(ValueError, match="v_ds >= 0"):
         vdmos_id_level1(-1.0, 5.0, r_d=1e-3)
+    # vdmos_id itself: reverse polarity is finite (diode-carried or zero), no raise
+    assert np.all(np.isfinite(vdmos_id(np.linspace(-5.0, 5.0, 11), 10.0, p)))
 
 
 def test_negative_rd_or_rs_raises():

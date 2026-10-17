@@ -85,6 +85,36 @@ class Params:
     r_s : float      Source series resistance [Ohm]. Also *degenerates* the
                    gate drive: the internal gate-source voltage is
                    v_gs - r_s*i_d, so g_m,eff = g_m/(1 + r_s*g_m).
+
+    Body-diode parameters (LTspice diode DC branch; see diode.py and README,
+    "Body diode"). Defaults are the OFF sentinel: i_s = i_sr = 0 makes the
+    diode current exactly zero and vdmos_id() bit-identical to the pre-diode
+    model. Beware near-collisions with channel names: i_s is the diode
+    saturation current, NOT the drain current i_d; k_n is the diode emission
+    coefficient, unrelated to v_sub; r_diode is the diode's own series
+    resistance, separate from the package r_d/r_s (the diode bypasses them).
+
+    i_s : float      Diffusion saturation current [A] (LTspice Is); 0 = off.
+                   Only meaningful PAIRED with k_n -- the datasheet diode data
+                   has no low-current tail, so i_s alone is weakly determined
+                   (sigma_rel ~ 1 in fits).
+    k_n : float      Diffusion emission coefficient [-] (LTspice N). Physical
+                   diffusion range ~1-2; > 2 absorbs high-injection bending
+                   into ideality and inflates the reverse floor.
+    i_sr : float     Recombination saturation current [A] (LTspice Isr);
+                   0 = branch off (default -- unsensed above 5 A).
+    k_nr : float     Recombination emission coefficient [-] (LTspice Nr).
+    i_kf : float     High-injection knee current [A] (LTspice Ikf); 0 = off
+                   (LTspice Ikf = inf equivalent). Fitted regime is tens of A.
+    r_diode : float  Diode series resistance [Ohm] (LTspice Rs, renamed to
+                   avoid the r_s collision). On the diode path only -- the
+                   diode connects to the device terminals and bypasses r_d/r_s.
+    t_nom : float    Temperature [degC] at which i_s/i_sr are defined
+                   (LTspice Tnom). Fixed, never fitted.
+    k_xti : float    Saturation-current temperature exponent [-] (LTspice Xti).
+                   Divided by k_n / k_nr per branch in the temperature law.
+    v_eg : float     Activation energy [eV, numerically volts] (LTspice Eg);
+                   silicon ~1.11. Sensed by multi-temperature diode data.
     """
 
     k_p: float = 34.7
@@ -104,6 +134,16 @@ class Params:
     v_kneemin: float = 1e-3
     r_d: float = 0.0
     r_s: float = 0.0
+    # Body diode (all defaults = off sentinel; see diode.py docstring).
+    i_s: float = 0.0
+    k_n: float = 1.0
+    i_sr: float = 0.0
+    k_nr: float = 2.0
+    i_kf: float = 0.0
+    r_diode: float = 0.0
+    t_nom: float = 25.0
+    k_xti: float = 3.0
+    v_eg: float = 1.11
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -119,10 +159,15 @@ PARAM_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Params))
 # Parameters fitted in log space (strictly positive, span decades).
 # v_ovmax is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
 # k_kneesharp likewise: 0 is the legitimate "legacy tanh" value.
+# Diode saturation currents are in LOG_PARAMS even though 0 is the off
+# sentinel: "off" is reached by leaving them out of the free set (same
+# doctrine as v_ovmax/k_kneesharp), and a FREE i_s must never wander near 0
+# -- its lower bound (1e-22) is far from the sentinel's neighbourhood.
 LOG_PARAMS: frozenset[str] = frozenset(
     {
         "k_p", "v_sub", "k_theta", "v_vsat", "k_eta", "k_lambda",
         "g_k", "v_kovsoft", "v_dbsat", "k_ovsharp",
+        "i_s", "k_n", "i_sr", "k_nr", "i_kf", "k_xti", "v_eg",
     }
 )
 
@@ -157,6 +202,20 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # loose global ceiling only -- per device cap at datasheet Rds(on).
     "r_d": (0.0, 0.5),
     "r_s": (0.0, 0.5),
+    # Body diode (LTspice D-model DC branch). i_s/i_sr lower bounds sit far
+    # from the 0 sentinel so a free value can never mimic "off"; i_kf lower
+    # bound 1e-3 A keeps a free i_kf away from the 0 sentinel ("off" = leave
+    # it out of the free set). r_diode linear like r_d/r_s (can be exactly 0);
+    # 0.5 Ohm global ceiling -- per device cap (scripts/fit_st8l65_diode.py
+    # DEVICE_BOUNDS: the diode dV/dI slope bounds it at ~20 mOhm on ST8L65).
+    "i_s": (1e-22, 1e-3),
+    "k_n": (1.0, 4.0),
+    "i_sr": (1e-22, 1e-3),
+    "k_nr": (1.0, 4.0),
+    "i_kf": (1e-3, 1e6),
+    "r_diode": (0.0, 0.5),
+    "k_xti": (0.5, 10.0),
+    "v_eg": (0.1, 2.0),
 }
 
 # Sensible starting free set: everything that shapes the static I-V curves.

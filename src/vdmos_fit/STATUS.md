@@ -1,21 +1,24 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-16 (session 11 — parameter rename to the type-prefix
-naming convention; model bit-identical). Companion to [README.md](../../README.md).*
+*Snapshot: 2026-10-17 (session 12 — body diode: LTspice diode DC branch,
+multi-temperature extraction, ST8L65 diode record). Companion to
+[README.md](../../README.md).*
 
 ## Current state
 
-Eleven sessions, all committed to `main` (session 9 added the drain-knee softness
-exponent `k_kneesharp`; session 10 re-fitted ST8L65 with it — see the k_kneesharp section below;
-session 11 renamed every parameter to the `<type prefix>_<suffix>` convention —
-names.xlsx + README "Naming convention" are the mapping, tag `pre-rename-2026-10`
-is the escape hatch, and the rename is bit-identical).
+Twelve sessions, all committed to `main` (session 11 renamed every parameter
+to the `<type prefix>_<suffix>` convention — names.xlsx + README "Naming
+convention" are the mapping, tag `pre-rename-2026-10` is the escape hatch, and
+the rename is bit-identical; session 12 added the **body diode** —
+`diode.py`, LTspice diode DC branch verified against LTspice 26.0.1,
+terminal-wired bypassing r_d/r_s, multi-temperature extraction, official
+record `ST8L65_DIODE`).
 The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (v_ovmax, k_ovsharp),
 mobility degradation via v_knee, velocity saturation, bounded DIBL, gated CLM,
 one-sided trench kink — embedded with package series resistance r_d/r_s (implicit
 external-node solve with a Newton stall guard, LTspice Rd/Rs semantics,
-v_ds ≥ 0 only), plus bounded least-squares extraction with identifiability
+channel v_ds ≥ 0 only; reverse polarity is carried by the body diode), plus bounded least-squares extraction with identifiability
 diagnostics. Along the way the project's Level-1 reference was corrected (knee
 at `v_ov/mtriode`, verified against LTspice 26.0.1 — the earlier NDR/continuity
 alarms were a bug in that reference, not in Level-1), and two mechanisms were
@@ -23,15 +26,16 @@ added then deleted as unsupported by the data: `kappa` (a drain-bias-dependent
 series resistance that was a voltage divider, not a charge limit; replaced by
 the cap) and a `gds·v_ds` drift leak (a one-point parameter that flattened the
 subthreshold curve to a gate-independent floor; the off state is now the
-gate-dependent softplus floor). Diagnostics were hardened to match what the
-data can actually support: dead Jacobian columns report σ = inf rather than a
-confident small σ, and `on_bounds` flags pinned parameters relative to the
-bound's magnitude, not the search-box width. Current OFFICIAL fit on
-ST8L65N044M9: **3.79 % relative RMSE (fit A, 10-param with `k_kneesharp` free, full
-41-point set, rank 8/10, cond 2.19e3)** — promoted this session; the 9-param
-fit B (5.54 %, `scripts/fit_st8l65.py`) is kept below as the superseded
-reference. 103 tests green, ruff clean. Datasheet Figure 3 (typical output
-curves) is on disk in `data/`.
+gate-dependent softplus floor, plus the diode's reverse saturation when the
+diode is on). Diagnostics were hardened to match what the data can actually
+support: dead Jacobian columns report σ = inf rather than a confident small σ,
+and `on_bounds` flags pinned parameters relative to the bound's magnitude, not
+the search-box width. Current OFFICIAL fits on
+ST8L65N044M9: channel **3.79 % relative RMSE (fit A, 10-param with `k_kneesharp` free, full
+41-point set, rank 8/10, cond 2.19e3)**; diode **4.78 % on 30 points
+(−55/25/150 °C), rank 4/4, cond 6.1e3, v_eg = 1.097 eV**. 120 tests green,
+ruff clean. Datasheet Figure 3 (typical output curves) and the body-diode
+forward characteristics CSV are on disk in `data/`.
 
 ## What exists
 
@@ -40,14 +44,17 @@ Projects/ImprovedVDMOS/
 ├── pyproject.toml          deps, pytest, ruff config, `vdmos-fit` console script
 ├── README.md               model + corrected Level-1 analysis
 ├── .gitignore
-├── src/vdmos_fit/          model, params, data, fit, plotting, reference
+├── src/vdmos_fit/          model, diode, params, data, fit, plotting, reference
 │                           (official device records), cli, __main__
 ├── tests/                  test_model, test_fit, test_package_r, test_gate_cap,
-│                           test_drain_softness, test_st8l65_official, test_cli,
-│                           test_digitizer
+│                           test_drain_softness, test_st8l65_official, test_diode,
+│                           test_cli, test_digitizer
 ├── scripts/                fit_datasheet.py, fit_st8l65.py (superseded),
-│                           fit_st8l65_nd.py (official recipe), roundtrip_demo.py
+│                           fit_st8l65_nd.py (official channel recipe),
+│                           fit_st8l65_diode.py (official diode recipe),
+│                           roundtrip_demo.py
 ├── data/                   README.md + ST8L65N044M9_IV.csv (41 digitised points)
+│                           + ST8L65N044M9_diode.csv (30 pts, −55/25/150 °C)
 │                           + ST8L65N044M9_Id_Vds_Vgs.png (datasheet Figure 3)
 └── notebooks/              README.md only (empty)
 ```
@@ -57,8 +64,12 @@ Projects/ImprovedVDMOS/
 - **Model** — `vdmos_id()` evaluates the unified continuous drain current
   (softplus subthreshold, gate-overdrive charge cap v_ovmax/k_ovsharp, mobility
   degradation via v_knee, velocity saturation, DIBL, gated CLM, one-sided kink
-  sigmoid), embedded with package series resistance r_d/r_s. No drift-leakage
-  term: the off state is the gate-dependent softplus floor.
+  sigmoid), embedded with package series resistance r_d/r_s, minus the body
+  diode `vdmos_diode()` (LTspice diode DC branch: diffusion + high-injection
+  compression + recombination + r_diode + Xti/Eg temperature law), wired at
+  the terminals and bypassing r_d/r_s. No drift-leakage term: the off state
+  is the gate-dependent softplus floor (channel) plus the diode reverse
+  saturation when the diode is on.
   `vdmos_id_level1()` is the **correct** LTspice reference with knee at
   `v_ov/mtriode` and takes the same r_d/r_s embedding for fair A/B.
 - **Extraction** — `fit()` runs bounded `least_squares` with positive
@@ -68,8 +79,9 @@ Projects/ImprovedVDMOS/
   `identifiability()` (post-fit: Jacobian rank, condition number,
   per-parameter σ, correlated pairs). Zero-sensitivity columns report `inf`,
   not 0. `FitResult.on_bounds()` flags bound-pinned parameters.
-- **Data I/O** — flat `CurveSet` (v_gs, v_ds, i_d), CSV load/save, synthetic
-  generator for round-trip validation.
+- **Data I/O** — flat `CurveSet` (v_gs, v_ds, i_d) and `DiodeCurveSet`
+  (i_sd, v_sd, temp_c), CSV load/save, synthetic generators for round-trip
+  validation.
 - **Plots** — output curves, transfer curves, gds across knee, fit-vs-data
   overlay, and `mtriode_shape()` reproducing the LTspice mtriode sweep figure.
 - **CLI** — `vdmos-fit check | fit <csv> | demo`, plus `python -m vdmos_fit`.
@@ -78,10 +90,21 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **103 tests, all passing**; `ruff check` clean. Caveat: 8 of the digitizer
+- **120 tests, all passing**; `ruff check` clean. Caveat: 8 of the digitizer
   window tests drive Tk and self-skip when the process has no display — in
   headless runs 0–2 of them skip (flaky per-process), so "N passed, M skipped"
   totals vary; don't pin the count.
+- **Body diode verified against LTspice 26.0.1**
+  (`test_diode.py::test_ltspice_cross_validation`, runs when LTspice is
+  installed): diffusion +
+  Ikf + Rs match to ~1e-3 at 0.3–0.9 V (the equation itself matches to ~1e-5
+  across 3.4 A … 375 kA), and the Xti/Eg temperature law (divisor N per
+  branch, Nr for Isr) matches at −55 °C to ~1 %. LTspice's own Isr branch
+  deviates from its documented form by 1–17 % below 0.3 V (measured;
+  documented in diode.py/README) — excluded from the cross-validation scope.
+- **Diode off-sentinel bit-identity**: with i_s = i_sr = 0 (default),
+  `vdmos_id` is bit-identical to the pre-diode model on the v_ds ≥ 0 grid
+  (fast path and package-R path both pinned).
 - All model anchors hold (r_d = r_s = 0 and v_ovmax = 0 fast paths are
   bit-identical to the pre-package-R / pre-cap model):
   Ron 4.27 mΩ, saturation table 31.5/91.0/157.1/225.9/297.7 A, α = 1.08,
@@ -242,6 +265,56 @@ Findings:
 - v_sub got worse as a one-point artifact (0.243 V ≈ 560 mV/dec). Queue 1
   (digitise a near-threshold transfer curve) is now the top data priority.
 
+## Current ST8L65 diode fit — OFFICIAL: fit A (4 free params, session 12)
+
+`scripts/fit_st8l65_diode.py` fit A; outputs `out/st8l65_diode_params.txt`,
+`out/st8l65_diode_probe.txt`, `out/st8l65_diode_fit.png`. Record in
+`vdmos_fit.reference.ST8L65_DIODE`, drift-checked by the script
+(`OFFICIAL_TOL`) and pinned by `tests/test_diode.py::test_st8l65_diode_record_reproduces`
+(RMSE < 5 %, per-temperature < 8 %, r_diode interior, reverse floor < 10 µA,
+v_eg in (0.9, 1.3) eV).
+
+Data: `data/ST8L65N044M9_diode.csv` — 30 points, I_sd 5–55 A at −55/25/150 °C.
+Free = i_s, r_diode, v_eg, i_kf; **k_n fixed 2.0** (physical diffusion limit),
+k_xti fixed 3.0 (LTspice default), i_sr = 0, t_nom = 25 °C; device bound
+r_diode ≤ 20 mΩ. Four multi-starts, all converge to the same basin.
+
+| | fit A (OFFICIAL, 30 pts) |
+|---|---|
+| RMSE_rel | **4.78 %** (−55 °C 3.40, 25 °C 3.85, 150 °C 6.49) |
+| i_s | 3.701e-6 A (σ_rel 0.88 — weak prefactor, pair with k_n) |
+| r_diode | 1.586 mΩ (σ_rel 0.004) |
+| v_eg | 1.0967 eV (σ_rel 0.093 — silicon bandgap, sensed) |
+| i_kf | 17.45 A (σ_rel 5.2; r_diode↔i_kf corr +0.948) |
+| rank / cond | **4/4** / 6.13e3 |
+| reverse floor (−1 V, 25 °C) | 3.7 µA |
+
+Findings / protocol decisions:
+
+- **The temperature law is mandatory**: a 25 °C-only fit predicts −55 °C
+  out-of-sample at ~260 % error; V_T-only scaling (no Xti/Eg) predicts the
+  forward drop going UP with T — the data goes DOWN. v_eg ≈ 1.10 eV is
+  genuinely sensed (σ_rel 0.09) — the multi-temperature data pins it.
+- **k_n fixed at 2.0 from physics**: the k_n sweep (i_kf off) shows RMSE
+  improving monotonically toward k_n ≈ 2.5–3 — ideality absorbing the
+  high-injection bending, with the reverse floor scaling with i_s (3 pA at
+  k_n = 1 → 0.4 mA at k_n = 3). Freeing k_n on top of fit A buys 0.12 %
+  (4.66 %), lands at k_n = 2.07 with corr(i_s, k_n) = +1.000 — the
+  ideality/prefactor split is a degenerate valley; only the PAIR is pinned.
+- **i_kf belongs in the primary set**: pinned off (sentinel 0.0 — NOT the
+  1e-3 lower bound, which is an active knee that crushes the current) the
+  fit is 6.48 %; free, 4.78 %. The high-injection knee carries real
+  curvature in the 5–55 A range.
+- **i_sr/k_nr unsensed**: freeing them gives identical RMSE with
+  σ(i_sr) = inf — recombination lives below the 5 A data floor. Keep off.
+- **i_s is a weak prefactor** (σ_rel ≈ 0.9): quote the curve or the pair
+  (k_n, i_s), never i_s alone — same doctrine as the channel knee cluster.
+- **Log-space packing is mandatory** for the diode fit: linear-space i_s
+  gave rank-deficient Jacobians and a runaway basin at r_diode ≈ 0.34 Ω;
+  log-space gives rank 4/4 and r_diode stable across starts. The per-device
+  r_diode ≤ 20 mΩ bound (measured dV/dI is 3.4–11.7 mΩ) excludes the
+  runaway even so.
+
 ## Open problems
 
 1. **k_lambda / v_dbsat unsensed (σ = inf) in the official fit** — *accepted, not a
@@ -278,12 +351,21 @@ Findings:
 
 ## Missing (agreed architecture, not yet built)
 
-- **Body diode + HV leakage** — the biggest model hole: the package-R path
-  is v_ds ≥ 0 only and reverse operation is undefined; real high-voltage
-  leakage belongs here, not in a fitted resistor.
+- **HV leakage / reverse breakdown (BV/Ibv)** — the diode now sets the
+  off-state floor at i_s(T) + i_sr(T) (µA scale, Shockley-consistent), but
+  the 650 V blocking spec and its leakage need a dedicated element; the
+  removed (0 V, 650 V, 1 µA) IV point waits on it.
+- **Third-quadrant channel conduction** — channel is 0 for v_ds ≤ 0; a
+  synchronous rectifier needs `sign(v_ds)·i_d(|v_ds|, v_gs)` (Queue item,
+  out of scope session 12).
+- **Body-diode Qrr / capacitance** (Cjo/Vj/M, Tt) — static diode I–V is in;
+  recovery and junction charge are not.
 - **Q(V) charge model** (charge-based capacitors via symbolic differentiation)
-  and the `Tj` thermal node for Cauer-ladder co-simulation.
-- **LTspice export**: fitted parameters → `.subckt`/`.model` for A/B.
+  and the `Tj` thermal node for Cauer-ladder co-simulation (the diode `t_c`
+  argument is the placeholder interface for Tj).
+- **LTspice export**: fitted parameters → `.subckt`/`.model` for A/B (the
+  diode part is already LTspice-exact: `D(Is=… N=… Isr=… Nr=… Ikf=… Rs=…
+  Tnom=… Xti=… Eg=…)`).
 - **CI**. (`notebooks/` is empty scaffolding.)
 - Validation target remains double-pulse Eon/Eoff within ~10 %, which static
   fitting alone cannot deliver.

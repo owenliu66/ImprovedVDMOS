@@ -22,21 +22,45 @@ With k_theta = v_vsat = k_eta = g_k = 0 this is a smooth approximation of the Le
 equations with m_triode = 1: exact in the ohmic limit and in deep saturation,
 up to ~6 % low around the knee (tests/test_model.py::test_level1_limit_agreement).
 
+The body diode (diode.py, LTspice diode DC branch) is assembled at the TERMINALS:
+
+    i_d = i_ch(v_ds > 0) - i_di(-v_ds)
+
+The diode bypasses r_d/r_s (only channel current flows through the package
+resistances), so the package-R solve and the diode r_diode solve stay
+independent one-dimensional problems. The channel contribution is 0 for
+v_ds <= 0 (the channel formulation is forward-polarity only; sign-symmetric
+channel conduction for synchronous rectification is a Queue item, not this
+model). With the diode off (i_s = i_sr = 0, the default) vdmos_id() is
+bit-identical to the pre-diode model.
+
 Design rationale -- Level-1 comparison, charge-cap physics, package-R solver
-derivation -- lives in the project README.md, not in these docstrings.
+derivation, body-diode topology and LTspice fidelity -- lives in the project
+README.md, not in these docstrings.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from .diode import _solve_diode_series_r, vdmos_diode
 from .params import DEFAULT, Params
 
-__all__ = ["vdmos_id", "vdmos_id_level1"]
+__all__ = ["vdmos_id", "vdmos_id_level1", "vdmos_diode"]
 
 
-def vdmos_id(v_ds, v_gs, p: Params = DEFAULT) -> np.ndarray:
-    """Drain current [A] of the improved VDMOS, including package r_d/r_s.
+def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarray:
+    """Drain current [A] of the improved VDMOS: channel + body diode + package R.
+
+    Terminal assembly (drain-referenced, positive into the drain):
+
+        i_d = i_ch(v_ds > 0) - i_di(v_sd = -v_ds)
+
+    The channel is evaluated at the internal node voltages through the
+    package r_d/r_s solve (forward polarity only); the body diode connects
+    directly to the terminals and bypasses r_d/r_s, carrying all reverse
+    current. With i_s = i_sr = 0 (the default) the diode is exactly zero and
+    this function is bit-identical to the pre-diode model.
 
     Parameters
     ----------
@@ -45,6 +69,9 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT) -> np.ndarray:
     p : Params
         Model parameter set (see :mod:`vdmos_fit.params`). r_d = r_s = 0 selects
         the intrinsic fast path (bit-identical to the pre-package-R model).
+    t_c : float
+        Device temperature [degC] for the diode branch (ignored when the
+        diode is off; the future Tj node supersedes it).
 
     Returns
     -------
@@ -54,11 +81,36 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT) -> np.ndarray:
     v_ds = np.asarray(v_ds, dtype=float)
     v_gs = np.asarray(v_gs, dtype=float)
     v_ds, v_gs = np.broadcast_arrays(v_ds, v_gs)
+
+    diode_off = p.i_s == 0.0 and p.i_sr == 0.0
+    if diode_off:
+        i_di = 0.0
+    else:
+        t_k = np.full(v_ds.shape, t_c + 273.15, dtype=float)
+        i_di = _solve_diode_series_r(-v_ds, p.r_diode, p, t_k)
+
+    fwd = v_ds > 0.0
+    if not np.any(fwd):
+        return np.zeros_like(v_ds) if diode_off else -i_di
+
     if p.r_d == 0.0 and p.r_s == 0.0:
-        return _channel_current(v_ds, v_gs, p)
-    return _solve_package_r(
-        v_ds, v_gs, p.r_d, p.r_s, lambda d, g: _channel_current(d, g, p)
-    )
+        if np.all(fwd):
+            i_ch = _channel_current(v_ds, v_gs, p)
+        else:
+            i_ch = np.zeros_like(v_ds)
+            i_ch[fwd] = _channel_current(v_ds[fwd], v_gs[fwd], p)
+    else:
+        # Solve on the forward-polarity points only: the channel model is
+        # singular in reverse, and the diode carries v_ds <= 0 by itself.
+        # The wrapper is 0 at v_ds = 0, so the package-R bracket proof
+        # (g strictly decreasing, f(0) = 0) is unchanged.
+        vd, vg = v_ds[fwd], v_gs[fwd]
+        i_ch = np.zeros_like(v_ds)
+        i_ch[fwd] = _solve_package_r(
+            vd, vg, p.r_d, p.r_s, lambda d, g: _channel_current(d, g, p)
+        )
+
+    return i_ch - i_di
 
 
 def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:

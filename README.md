@@ -145,10 +145,13 @@ down if a device lands in that regime.
 
 ### Off state
 
-Below threshold the softplus channel is the **only** current: i_d falls
-gate-dependently with slope 1/v_sub down to ~1e-13 A at v_gs = 0. Real
-high-voltage leakage will come with the body diode / leakage element, not a
-fitted resistor.
+Below threshold the softplus channel is the **only** channel current: i_d
+falls gate-dependently with slope 1/v_sub down to ~1e-13 A at v_gs = 0. With
+the body diode ON (i_s > 0), the diode's reverse saturation i_s(T) + i_sr(T)
+becomes the off-state floor at v_ds > 0 (µA scale on ST8L65 —
+Shockley-consistent, exactly what LTspice does); the softplus floor only
+dominates while the diode is off. Real high-voltage leakage still needs a
+dedicated element (BV/Ibv), not a fitted resistor.
 
 ### Package resistance (r_d, r_s)
 
@@ -173,25 +176,95 @@ bisection forced until progress resumes (pinned by
 `tests/test_package_r.py::test_solver_survives_newton_two_cycle`).
 r_d = r_s = 0 takes the explicit fast path (bit-identical to the pre-package-R
 model; pinned by `tests/test_package_r.py`). Forward polarity only (v_ds ≥ 0):
-the channel-only model is singular in reverse until the body diode exists.
+the channel-only model is singular in reverse — `vdmos_id` never routes
+negative v_ds into this solver; the body diode carries it (next section).
+
+### Body diode
+
+The body diode is the **LTspice diode DC branch** (module `diode.py`), wired
+at the device TERMINALS so it **bypasses r_d/r_s** — only channel current
+flows through the package resistances, and the two implicit solves
+(package-R, diode r_diode) stay independent one-dimensional problems:
+
+```
+   drain o──[r_d]──(D')══════ channel ══════(S')──[r_s]──┬─o source
+                     │                                  │
+                     └───────── diode + r_diode ─────────┘   anode = source
+
+i_d = i_ch(v_ds > 0) − i_di(v_sd = −v_ds)
+
+i_di = i_diffuse + i_recomb
+v_di = v_sd − r_diode·i_di                                (implicit)
+i_diffuse = i_s(T)·[exp(v_di/(k_n·v_therm)) − 1] / sqrt(1 + i_s(T)/i_kf·[exp(…) − 1])
+i_recomb  = i_sr(T)·[exp(v_di/(k_nr·v_therm)) − 1]
+i_s(T)  = i_s ·(T/T_nom)^(k_xti/k_n) ·exp[(v_eg·q/k_B/k_n)·(1/T_nom − 1/T)]
+          (same law for i_sr(T), divisor k_nr)
+```
+
+Sign convention: `v_sd = −v_ds`, anode = source (N-FET); positive i_di flows
+source → drain. The diode CSV keeps the datasheet source-referenced spelling
+(`I_sd,v_sd,T`); the conversion lives in the model/fitter.
+
+LTspice mapping: `Is→i_s  N→k_n  Isr→i_sr  Nr→k_nr  Ikf→i_kf  Rs→r_diode
+Tnom→t_nom  Xti→k_xti  Eg→v_eg`. Capacitance (Cjo/Vj/M), transit time,
+breakdown (BV/Ibv) and noise are out of scope; instance multiplicity (`m=`)
+is a wiring-level parallel-device count, not a model parameter (the
+model-card `M` is the junction grading coefficient — capacitance only), so
+`M = 1` here.
+
+Verified against LTspice 26.0.1 (`.dc`/`.step temp`/`.meas` probes, pinned by
+`tests/test_diode.py::test_ltspice_cross_validation`):
+
+- the high-injection divisor matches LTspice to ~1e-5 relative across
+  3.4 A … 375 kA;
+- the saturation-current temperature law uses **N** (not Berkeley's NTT) as
+  the divisor of k_xti and v_eg; the recombination branch uses **Nr**;
+- LTspice's own recombination branch deviates from its documented
+  `Isr·(exp(V/NrVt)−1)` by ~1 % at 0.02 V growing to ~17 % at 0.3 V
+  (V-dependent, exactly linear in Isr — an implementation quirk). We
+  implement the *documented* form; the cross-validation test covers the
+  diffusion + Ikf + temperature terms only, and the ST8L65 data lives at
+  0.56–1.05 V where i_sr is unsensed anyway.
+
+Channel for `v_ds ≤ 0` is **0**: the channel formulation is forward-polarity
+only (odd k_db, singular velocity divisor). All reverse current is diode
+current. Sign-symmetric channel conduction for synchronous rectification
+(`sign(v_ds)·i_d(|v_ds|, v_gs)`) is a Queue item, not this model.
+
+Sentinels: `i_s = i_sr = 0` (the default) → diode current exactly 0 →
+`vdmos_id` is bit-identical to the pre-diode model (pinned by
+`tests/test_diode.py`). `i_kf = 0` → high-injection divisor off (LTspice
+`Ikf = inf` equivalent); the divisor applies to the forward branch only —
+reverse saturation is physically unaffected by high-level injection. "Off"
+is reached by leaving the parameter out of the free set, never by driving it
+to the lower bound (bounds start at 1e-22 A / 1e-3 A for that reason).
+
+Extraction: `fit_diode()` on `DiodeCurveSet` (multi-temperature, per-point
+temperature). The free set IS the protocol — see `scripts/fit_st8l65_diode.py`
+and STATUS, "Current ST8L65 diode fit": k_n fixed at 2.0 from physics,
+i_kf/v_eg/r_diode free, i_sr off (unsensed).
 
 ## Project status
 
-Ten sessions, all committed to `main`. The package provides one C¹ continuous
+Twelve sessions, all committed to `main`. The package provides one C¹ continuous
 drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
-package r_d/r_s, plus bounded least-squares extraction with identifiability
+package r_d/r_s, **plus the body diode** (LTspice diode DC branch with
+high-injection compression and the Xti/Eg temperature law, terminal-wired,
+bypassing r_d/r_s), plus bounded least-squares extraction with identifiability
 diagnostics (dead Jacobian columns report σ = inf; `on_bounds` scales with the
 bound's magnitude, not the box width). Two mechanisms were added and then
 deleted as unsupported by the data: `kappa` (a voltage divider posing as a
 package resistance) and a `gds·v_ds` leak (a one-point parameter that flattened
 the subthreshold curve) — the off state is now the gate-dependent softplus
-floor. Current **official** fit on ST8L65N044M9: **3.79 % relative RMSE
+floor (plus the diode's reverse saturation when the diode is on). Current
+**official** fits on ST8L65N044M9: channel **3.79 % relative RMSE
 (fit A, 10-param with `k_kneesharp` free, full 41-point set), Jacobian rank 8/10,
-cond 2.19e3**, 103 tests green. `k_lambda`/`v_dbsat` report σ = inf because the data
+cond 2.19e3**; diode **4.78 % on 30 points (−55/25/150 °C), rank 4/4, v_eg =
+1.097 eV ≈ silicon bandgap**, 120 tests green. `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
-not a fit failure. Remaining gaps: Q(V), body diode +
-HV leakage, thermal node, LTspice export — details and open problems in
+not a fit failure. Remaining gaps: Q(V), HV
+leakage, thermal node, LTspice export — details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
 ## Layout
@@ -200,13 +273,16 @@ HV leakage, thermal node, LTspice export — details and open problems in
 ImprovedVDMOS/
 ├── pyproject.toml          metadata, deps, pytest + ruff config
 ├── src/vdmos_fit/          the importable package
-│   ├── model.py            vdmos_id(), vdmos_id_level1()
+│   ├── model.py            vdmos_id(), vdmos_id_level1(), package-R solver
+│   ├── diode.py            vdmos_diode(), LTspice diode DC branch + r_diode solver
 │   ├── params.py           Params dataclass, bounds, log-space packing
-│   ├── data.py             CurveSet, CSV I/O, synthetic data
-│   ├── fit.py              least_squares extraction + identifiability
+│   ├── data.py             CurveSet / DiodeCurveSet, CSV I/O, synthetic data
+│   ├── fit.py              least_squares extraction + identifiability (+ fit_diode)
+│   ├── reference.py        official fitted device records (channel + diode)
 │   ├── plotting.py         output/transfer/gds/overlay plots
 │   └── cli.py              `vdmos-fit` command
-├── tests/                  pytest suite (model regressions + fit round-trip)
+├── tests/                  pytest suite (model regressions + fit round-trips,
+│                           test_diode.py incl. LTspice cross-validation)
 ├── scripts/                thin entry points (no logic here)
 ├── data/                   measured/digitised CSVs (see data/README.md)
 ├── notebooks/              exploratory work
@@ -220,7 +296,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 103 tests green (digitizer Tk window tests self-skip headless)
+pytest                            # 120 tests green (digitizer Tk window tests self-skip headless)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
@@ -310,8 +386,9 @@ at 1.0 in float) and decays smoothly to zero below.
   returns an unconverged current.
 - Forward polarity only: the velocity-saturation divisor `1 + v/v_vsat` is
   singular near `v_ds ≈ −v_vsat` and the numerator is not odd, so the bracket
-  argument fails for v_ds < 0. Reverse operation needs the body diode
-  (STATUS problem 7), not this solver.
+  argument fails for v_ds < 0. `vdmos_id` never routes negative v_ds here —
+  the body diode carries reverse polarity — but the guard stays for direct
+  callers (and `vdmos_id_level1`, which has no diode, still fails loudly).
 
 ### Bounds and fitting-space decisions
 
@@ -397,11 +474,14 @@ argparse fills subparser defaults into the namespace unconditionally.
 
 ## Scope / not yet implemented
 
-This package is the **channel current plus package series resistance**. The
+This package is the **channel current plus package series resistance plus the
+body-diode DC branch**. The
 agreed architecture keeps the rest of the subcircuit as-is: charge-based Q(V)
 capacitors (symbolic differentiation, guarantees charge conservation), split
 series R for channel/drift (intrinsic; the *package* r_d/r_s are now in the model
-itself), body diode with Qrr, and the `Tj` node for Cauer-ladder co-simulation.
+itself), body-diode recovery charge Qrr (the static diode I–V is in; the
+reverse-recovery and HV-leakage elements are not), and the `Tj` node for
+Cauer-ladder co-simulation.
 Validation target remains double-pulse Eon/Eoff within ~10 %, which static
 fitting alone cannot deliver.
 

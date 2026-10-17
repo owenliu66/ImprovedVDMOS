@@ -1,133 +1,75 @@
-# Handover — ImprovedVDMOS (naming-convention rename, COMPLETE)
+# Handover — ImprovedVDMOS session 13: BODY DIODE COMPLETE + committed; pending list closed
 
-## What happened
+Session 12 (body diode) is COMPLETE and committed to `main`; its handover
+content was replaced by this file. Escape hatch for the session-11 rename:
+tag `pre-rename-2026-10`.
 
-Repo-wide variable rename to the new naming convention (`<type prefix>_<suffix>`,
-Greek letters get the `k_` prefix). The scheme was reviewed and locked with the
-user over two sessions; `names.xlsx` (committed with the rename) is the single
-source of truth. Decisions locked:
+## What session 13 did (closing session 12's PENDING list)
 
-- `m_triode` **stays** (LTspice model-card mapping; `vdmos_id_level1` is a
-  foreign-model adapter).
-- **CSV headers stay `vgs,vds,ids`** — external contract with the digitizer.
-  `data.py` has `_CSV_COLUMNS`/`_CSV_HEADERS` mapping the new attribute names
-  (`CurveSet.v_gs/v_ds/i_d`) to the legacy header spellings.
-- Theta joins the unit exception list: `k_` factors are unitless EXCEPT
-  `k_p` [A/V²] and the standard 1/V trio `k_lambda`, `k_eta`, `k_theta`.
-- `gk` is a **conductance** [S], not transconductance (xlsx Type fixed).
-- `db` = drain **bias**, not drain-to-body (no bulk terminal in this model) —
-  documented in the README naming section.
+1. **tests/test_diode.py fixes:**
+   - Fixes (a)–(d) from the session-12 list (forward-floor sign, top-level
+     `from vdmos_fit import identifiability`, `.meas` parser regex
+     `^(m\d+):\s*I\(V1\)\s*=\s*(\S+)` with `m03/m06/m09` tags, `naive_diode`
+     ±700 exponent clip) were **already applied in the working tree** when
+     session 12 ended — the handover predated the last edits. Verified, not
+     re-applied.
+   - Fix (e) APPLIED here: `test_st8l65_diode_record_reproduces` RMSE bound
+     tightened 0.050 → **0.049** (record is 0.0478).
+   - Fix (f) VERIFIED: LTspice batch mode `LTspice.exe -b -w` works headless
+     (rc=0, `xcheck.log` written, all three `.meas` parsed). Exe found at
+     `C:\Program Files\ADI\LTspice\LTspice.exe` (not on PATH — the
+     `_ltspice_exe()` candidate list covers it). The cross-validation test
+     RUNS, skipif never fires on this machine.
+2. **Full suite:** `pytest` → **120 passed, 0 failed, 0 skipped** (LTspice
+   cross-validation ran; the 8 Tk digitizer window tests also ran on this
+   desktop — totals still not pinned). `test_diode.py` alone: 17 passed.
+   `ruff check` → clean.
+3. **Docs:** README "Body diode" section, Package-R bullet ("the body diode
+   carries it"), Scope update, STATUS.md session-12 snapshot with diode out
+   of Missing, data/README.md `ST8L65N044M9_diode.csv` entry — all were
+   **already written** by session 12's end (the handover's "Docs NOT started"
+   was stale). Content checked against the handover spec: complete.
+   `names.xlsx`: the `v_sd` row EXISTS at **row 43** (not row 28 as the
+   handover anticipated — blank row 28 now separates channel rows 2–27 from
+   diode rows 29–43; position is cosmetic, every row's E-column formula is
+   row-relative and resolves). Verified all 15 diode-block formulas against
+   `params.py`: i_di, v_therm, v_di, i_diffuse, i_recomb, i_s, k_n, i_sr,
+   k_nr, i_kf, r_diode, t_nom, k_xti, v_eg, v_sd. Prefix sheet covers
+   `temperature` (row 7, inside VLOOKUP range $A$2:$B$7) so t_nom resolves.
+4. **Committed to main** (session-12 work + this closure in one commit).
 
-## Final mapping (old → new)
+## Evidence numbers (session-13 verification)
 
-| old | new | old | new |
-|---|---|---|---|
-| kp | `k_p` | lam | `k_lambda` |
-| vth0 | `v_th0` | gk | `g_k` |
-| ksub | `v_sub` | vthk | `v_thk` |
-| kcap | `v_ovmax` | kk | `v_kovsoft` |
-| m | `k_ovsharp` | vk | `v_dbsat` |
-| theta | `k_theta` | vov_floor | `v_kneemin` |
-| vsat | `v_vsat` | rd / rs | `r_d` / `r_s` |
-| nd | `k_kneesharp` | gate (local) | `k_db` |
-| eta | `k_eta` | vth / vov (locals) | `v_th` / `v_ov` (+ new `v_ov_eff`) |
-| vds / vgs / Id | `v_ds` / `v_gs` / `i_d` | vknee / v (locals) | `v_knee` / `v_dseff` |
-| kink_gate (local) | `k_kink` | id_floor (fit kwarg) | `i_d_floor` |
+- LTspice batch probe (Is=1e-6 N=1.5 Ikf=5 Rs=1e-3 Xti=3 Eg=1.11 Tnom=25,
+  .temp 25, .dc V1 0→1): m03 = −2.40095541812e-3, m06 = −3.66624522209,
+  m09 = −86.0688171387 A — parsed cleanly by the test regex.
+- Official diode record reproduces under the tightened 0.049 bound; per-T
+  rms −55 °C 3.40 %, 25 °C 3.85 %, 150 °C 6.49 % (unchanged).
 
-Sentinel semantics unchanged: `v_ovmax = 0` = cap off, `k_kneesharp = 0` =
-legacy tanh, `v_kneemin` never fitted. `LOG_PARAMS`/`BOUNDS`/`DEFAULT_FREE`
-keys renamed; values identical.
+## Queue (unchanged, user's decision 3)
 
-## All work items completed (A–J)
-
-A. README model-equation block rewritten: `k_db`, `v_ov_eff`, `v_dseff`,
-   `^k_ovsharp`, `softmin(v_ds, v_knee, k_kneesharp)` form.
-B. README "Naming convention" section ADDED (prefix table from names.xlsx
-   Prefix sheet, `k_` rule + unit exceptions, `db` = drain-bias caveat,
-   sharp-vs-soft duality, `m_triode` carve-out, CSV-header contract).
-C. Derivative notation fixed repo-wide: `di_d/dv_ds`, `di_d/dv_gs`,
-   `dv_ov_eff/dv_ov`, `dv_dseff/dv_ds`, `dg/di_d` (README, plotting.py,
-   test_model/test_gate_cap/test_drain_softness).
-D. Greek letters referring to OUR model → `k_theta`/`k_eta`/`k_lambda`
-   (README prose + table, STATUS fit tables). λ/Kp/Vov/Vto/mtriode in
-   Level-1 SPICE context KEPT (item E).
-E. Level-1 SPICE-name prose kept; README `Vov_eff` (our model) → `v_ov_eff`.
-F. test_model.py kink local `gate` → `k_kink`.
-G. README section renamed "Gate-cap numerics" → "Charge-cap numerics"
-   (model.py docstring points there); all `v_ovmax/m` → `v_ovmax/k_ovsharp`
-   in README/STATUS/HANDOVER/scripts.
-H. Column widths bumped: fit.py `{name:<10s}` → `<12s`; scripts `{name:<8s}`
-   → `<12s`; roundtrip_demo `<10s` → `<12s` (k_kneesharp is 11 chars).
-I. Mask locals `m = np.isclose(...)` → `msk` in plotting.py and both fit
-   scripts.
-J. `~$names.xlsx` Excel lock file: already gone (nothing to delete).
-
-Extra identifier cleanup beyond the word-boundary audit (old names embedded in
-identifiers, no external references — verified by grep):
-`test_nd_*` → `test_kneesharp_*`, `test_no_ndr_with_fitted_nd` →
-`..._fitted_kneesharp`, `test_round_trip_recovers_nd` → `..._kneesharp`,
-`NDTRUTH` → `KNEE_TRUTH`, `test_kcap_zero` → `test_cap_zero`,
-`test_cap_monotone_with_kcap_asymptote` → `..._with_v_ovmax_asymptote`,
-`test_subthreshold_slope_matches_ksub` → `..._matches_v_sub`,
-`nd_bound_probe` → `kneesharp_bound_probe`, `lam_cap_probe` →
-`klambda_cap_probe`, `theta_vsat_probe` → `ktheta_vsat_probe`,
-`nd_s/nd0/p_nd` → `knee_s/ks0/p_ks`, plot labels `nd_A/nd_B` →
-`knee_A/knee_B`, `Id_plateau` → `i_plateau`, `vov_` → `v_ov`, and the
-"ksub is anchored…" output strings in both fit scripts → "v_sub is anchored…".
-
-## Verification results (all run post-edit)
-
-1. `pytest` → **101 passed, 2 skipped** (103 collected — identical per-file
-   collection to tag `pre-rename-2026-10`; the 1–2 skips are the flaky Tk
-   digitizer tests, STATUS says don't pin the count).
-2. `ruff check` → clean (17 E501 line-length violations introduced by the
-   rename were wrapped).
-3. Fingerprint: all 10 arrays in `out/_rename_baseline.npz` reproduced
-   **bit-identically** (`np.array_equal`). Recipes: grid
-   `v_gs=linspace(-2,16,181)` × `v_ds=linspace(0,60,241)`;
-   default_grid / official_grid (= ST8L65_OFFICIAL incl. its r_d/r_s) /
-   level1_grid (default kwargs) / default_pkgR (DEFAULT + r_d=2e-3, r_s=1e-3) /
-   official_pkgR (OFFICIAL + r_d=0.024, r_s=0.007) / cap_on (DEFAULT +
-   v_ovmax=1.0, k_ovsharp=9.0) / nd_on (k_kneesharp=4.0) / nd_tanh (2.8) /
-   official_resid (model − meas, amperes, on the CSV) / example (DEFAULT on the
-   example_dataset grid). npz deleted after comparison.
-4. Bonus A/B: a 12-probe battery (cap/knee/package-R/DIBL/CLM/subthreshold/
-   kink/Level-1 variants) run against a `pre-rename-2026-10` worktree →
-   **all bit-identical**.
-5. `python scripts/roundtrip_demo.py` → recovery unchanged (0.86 % rel RMSE).
-6. `python scripts/fit_st8l65_nd.py` → fit A 3.79 %, fit B 1.52 %,
-   official-record drift **1.79e-06 [OK]** (no `[STALE]`).
-7. Word-boundary grep for every old name in `src/vdmos_fit`, `tests`,
-   `scripts` → only allowed hits: `m_triode`/`mtriode`/`Kp`/`Vov`/`Vto`/
-   `Lambda` (Level-1 SPICE names), CSV header strings in `data.py`,
-   "python -m", `m` = milli in an output format, mtriode loop variable in
-   test_model. `src/curve_digitizer` untouched (its `m` is a transform slope).
+- **Third-quadrant channel**: `sign(v_ds)·i_d(|v_ds|, v_gs)` for
+  synchronous-rectifier support; channel stays clamped 0 for v_ds ≤ 0.
+- **HV leakage / BV/Ibv**: reverse-blocking floor is currently the Shockley
+  i_s(T)+i_sr(T) ≈ 3.7 µA @ −1 V/25 °C (datasheet ~1 µA @650 V) — dedicated
+  leakage element still needed; the removed (0 V, 650 V, 1 µA) IV point
+  waits on it.
+- Q(V)/Qrr, `Tj` node (diode `t_c` is the placeholder interface), LTspice
+  `.subckt` export, CI.
 
 ## Notes / gotchas
 
-- `vdmos_id_level1()` kwargs are `k_p, v_th0, v_sub, m_triode, k_lambda, r_d,
-  r_s` — all call sites updated; any notebook or external snippet using
-  `kp=`/`lam=` breaks. Hard break accepted: no alias layer; tag
-  `pre-rename-2026-10` is the escape hatch.
-- `reference.py` docstring carries a "(re-labelled 2026-11; values unchanged)"
-  note — keep it until the next release.
-- The regex pass renamed `id_` → `i_d` inside `_solve_package_r` and
-  `ids` → `i_d` in scripts/tests; audited, no collisions with `i_d_floor`.
-- `plotting.py` `_vov` helper and `test_model.py` `v_ov()` helper take
-  `v_th0`/`v_sub` kwargs now.
-- Dev environment note: the repo has no venv; pytest/ruff were installed into
-  the assistant's `engineering313` tool env for the verification runs.
-
-## Standing project state (unchanged by the rename)
-
-- OFFICIAL reference: fit A of `scripts/fit_st8l65_nd.py` (10-param,
-  `k_kneesharp` free), 3.79 % rel RMSE, rank 8/10, cond 2.19e3; record in
-  `vdmos_fit.reference.ST8L65_OFFICIAL`, pinned by `tests/test_st8l65_official.py`.
-  `k_lambda`/`v_dbsat` σ = inf is expected (data stops at Vds = 20 V).
-- Queue after the rename: (1) knee-cluster identifiability via dense knee-region
-  data; (2) body diode / reverse polarity + HV leakage — biggest model hole,
-  package-R path is v_ds ≥ 0 only; (3) architecture: Q(V), Tj node, LTspice
-  export, CI.
-- If the official set is ever exported to LTspice: pin `k_lambda = 0` and any
-  `v_dbsat` rather than shipping the fitted (unsensed) numbers.
-- `.vscode/` remains untracked (user's call). `out/` is gitignored.
+- `.vscode/settings.json` left UNTRACKED (editor-local, not part of the
+  session). Add to .gitignore or commit deliberately in a future session.
+- `out/` is gitignored: `st8l65_diode_{params,probe}.txt` and
+  `st8l65_diode_fit.png` are on disk as evidence but not in git; the record
+  itself lives in `vdmos_fit/reference.py` and is drift-checked by
+  `scripts/fit_st8l65_diode.py` (`OFFICIAL_TOL`, 3.65e-6 [OK] at session-12
+  close) and pinned by `tests/test_diode.py`.
+- i_kf "off" = sentinel 0.0, never the 1e-3 bound (active knee).
+- Fit protocol lessons stand: log-space packing mandatory; r_diode device
+  bound (0, 20 mΩ); k_n fixed 2.0 (i_s↔k_n corr +1.000 degenerate);
+  r_diode↔i_kf corr +0.948; i_s weak prefactor (σ_rel 0.88) — quote the
+  (k_n, i_s) pair.
+- Dev env: no venv in repo; pytest/ruff live in the assistant's
+  `engineering313` env (Python 3.13.5).

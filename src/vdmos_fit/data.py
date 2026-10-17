@@ -11,7 +11,17 @@ import numpy as np
 from .model import vdmos_id
 from .params import Params
 
-__all__ = ["CurveSet", "load_csv", "save_csv", "make_synthetic", "example_dataset"]
+__all__ = [
+    "CurveSet",
+    "DiodeCurveSet",
+    "load_csv",
+    "load_diode_csv",
+    "save_csv",
+    "save_diode_csv",
+    "make_synthetic",
+    "make_synthetic_diode",
+    "example_dataset",
+]
 
 # On-disk column names are an EXTERNAL contract (the curve digitizer exports
 # them and the digitised datasheet CSVs already use them), so they keep the
@@ -85,6 +95,77 @@ def save_csv(data: CurveSet, path: str | Path) -> None:
         w.writerows(zip(data.v_gs, data.v_ds, data.i_d, strict=True))
 
 
+@dataclass(frozen=True)
+class DiodeCurveSet:
+    """Flat arrays of (i_sd, v_sd, temp_c) triplets -- one row per measured point.
+
+    Body-diode forward data, source-referenced: ``i_sd`` [A] flows source ->
+    drain (anode = source), ``v_sd`` [V] is the source-drain drop (positive
+    forward), ``temp_c`` [degC] the measurement temperature. The model's
+    drain-referenced sign convention is ``v_ds = -v_sd``; the conversion
+    lives in the model/fitter, not here -- the CSV keeps the datasheet's
+    own spelling.
+    """
+
+    i_sd: np.ndarray
+    v_sd: np.ndarray
+    temp_c: np.ndarray
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        n = len(self.i_sd)
+        if not (len(self.v_sd) == len(self.temp_c) == n):
+            raise ValueError("i_sd, v_sd and temp_c must have the same length")
+
+    def __len__(self) -> int:
+        return len(self.i_sd)
+
+    def subset(self, mask: np.ndarray) -> DiodeCurveSet:
+        return DiodeCurveSet(self.i_sd[mask], self.v_sd[mask], self.temp_c[mask], self.label)
+
+    def temp_grid(self) -> list[float]:
+        return sorted({round(float(t), 9) for t in self.temp_c})
+
+
+def load_diode_csv(path: str | Path) -> DiodeCurveSet:
+    """Read a diode CSV with header `I_sd,v_sd,T` (an `index` column is ignored).
+
+    Column match is case-insensitive by header, like :func:`load_csv`.
+    `T` is degrees Celsius (datasheet convention).
+    """
+    path = Path(path)
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        raise ValueError(f"{path} has no data rows")
+    cols = {k.strip().lower(): k for k in rows[0] if k}
+    need = {"i_sd": "I_sd", "v_sd": "v_sd", "t": "T"}
+    missing = [disp for key, disp in need.items() if key not in cols]
+    if missing:
+        raise ValueError(f"{path} missing column(s) {missing}; header is {list(rows[0])}")
+    get = lambda r, c: float(r[cols[c]])  # noqa: E731
+    return DiodeCurveSet(
+        np.array([get(r, "i_sd") for r in rows]),
+        np.array([get(r, "v_sd") for r in rows]),
+        np.array([get(r, "t") for r in rows]),
+        label=path.stem,
+    )
+
+
+def save_diode_csv(data: DiodeCurveSet, path: str | Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["index", "I_sd", "v_sd", "T"])
+        w.writerows(
+            (i + 1, a, b, t)
+            for i, (a, b, t) in enumerate(
+                zip(data.i_sd, data.v_sd, data.temp_c, strict=True)
+            )
+        )
+
+
 def make_synthetic(
     truth: Params,
     v_gs_vals: np.ndarray,
@@ -125,3 +206,45 @@ def example_dataset(noise: float = 0.01, seed: int = 1) -> CurveSet:
         v_thk=1.5,
     )
     return make_synthetic(truth, v_gs, v_ds, noise=noise, seed=seed)
+
+
+def make_synthetic_diode(
+    truth: Params,
+    i_sd_vals: np.ndarray,
+    temps_c: np.ndarray,
+    *,
+    noise: float = 0.0,
+    seed: int = 0,
+) -> DiodeCurveSet:
+    """Diode forward points: solve v_sd(i_sd) from `truth` at each temperature.
+
+    The datasheet diode spec is current-referenced (V at given I), so the
+    generator inverts the model per point (monotone -> unique root) rather
+    than sweeping voltage. Used to verify the diode fitter recovers known
+    parameters; noise is multiplicative on v_sd, matching the datasheet
+    read-off error mode.
+    """
+    from scipy.optimize import brentq
+
+    from .diode import vdmos_diode
+
+    rng = np.random.default_rng(seed)
+    i_sd, v_sd, temps = [], [], []
+
+    def v_root(tc: float, i_ref: float) -> float:
+        def f(v: float) -> float:
+            return float(vdmos_diode(v, truth, t_c=tc)) - i_ref
+
+        return brentq(f, -0.5, 2.5, xtol=1e-14, rtol=8.9e-16)
+
+    for t_c in np.atleast_1d(temps_c):
+        for i_ref in np.atleast_1d(i_sd_vals):
+            v = v_root(float(t_c), float(i_ref))
+            if noise:
+                v *= 1.0 + noise * rng.standard_normal()
+            i_sd.append(float(i_ref))
+            v_sd.append(v)
+            temps.append(float(t_c))
+    return DiodeCurveSet(
+        np.array(i_sd), np.array(v_sd), np.array(temps), label="synthetic_diode"
+    )

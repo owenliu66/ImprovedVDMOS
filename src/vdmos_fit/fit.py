@@ -9,7 +9,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
-from .data import CurveSet
+from .data import CurveSet, DiodeCurveSet
+from .diode import vdmos_diode
 from .model import vdmos_id
 from .params import BOUNDS, DEFAULT, DEFAULT_FREE, Params, pack, unpack, vector_bounds
 
@@ -17,6 +18,9 @@ __all__ = [
     "FitResult",
     "Identifiability",
     "fit",
+    "fit_diode",
+    "diode_residuals",
+    "diode_sensitivity_report",
     "identifiability",
     "parameter_uncertainty",
     "residuals",
@@ -165,6 +169,116 @@ def parameter_uncertainty(
     Returns `math.inf` for parameters the data has no sensitivity to.
     """
     return identifiability(result, free).sigma_rel
+
+
+def diode_residuals(
+    x: np.ndarray,
+    free: Sequence[str],
+    data: DiodeCurveSet,
+    base: Params = DEFAULT,
+    *,
+    i_d_floor: float = 1e-3,
+    weight: str = "relative",
+) -> np.ndarray:
+    """Residual vector for the diode fit: model i_sd(v_sd, T) minus measured.
+
+    Same weighting semantics as :func:`residuals` (relative by default --
+    datasheet diode curves are read off log-ish axes; "abs" weights amperes).
+    Each point is evaluated at its own measured temperature.
+    """
+    p = unpack(x, free, base)
+    model = vdmos_diode(data.v_sd, p, t_c=data.temp_c)
+    err = model - data.i_sd
+    if weight == "relative":
+        err = err / np.maximum(np.abs(data.i_sd), i_d_floor)
+    elif weight != "abs":
+        raise ValueError(f"unknown weight {weight!r}")
+    return err
+
+
+def fit_diode(
+    data: DiodeCurveSet,
+    *,
+    start: Params,
+    free: Sequence[str],
+    weight: str = "relative",
+    max_nfev: int = 4000,
+    verbose: bool = False,
+    bounds_overrides: dict[str, tuple[float, float]] | None = None,
+) -> FitResult:
+    """Extract body-diode parameters from a multi-temperature diode dataset.
+
+    `free` has no default on purpose: the diode free set IS the protocol
+    (which mechanisms the data can support) -- see scripts/fit_st8l65_diode.py
+    and README, "Body diode". Positive diode parameters are optimised in log
+    space (params.LOG_PARAMS); r_diode is linear like r_d/r_s. `start` is
+    required because the all-off DEFAULT is a singular starting point for a
+    diode fit (zero sensitivity everywhere).
+    """
+    free = tuple(free)
+    x0 = pack(start, free)
+    lo, hi = vector_bounds(free, bounds_overrides)
+    x0 = np.clip(x0, lo + 1e-9, hi - 1e-9)
+
+    sol = least_squares(
+        diode_residuals,
+        x0,
+        bounds=(lo, hi),
+        args=(free, data, start),
+        kwargs={"weight": weight},
+        method="trf",
+        x_scale="jac",
+        max_nfev=max_nfev,
+        verbose=2 if verbose else 0,
+    )
+
+    p = unpack(sol.x, free, start)
+    rel = diode_residuals(sol.x, free, data, start, weight="relative")
+    table = {**BOUNDS, **(bounds_overrides or {})}
+    return FitResult(
+        params=p,
+        cost=float(sol.cost),
+        rmse_rel=float(np.sqrt(np.mean(rel**2))),
+        n_points=len(data),
+        n_free=len(free),
+        success=bool(sol.success),
+        message=str(sol.message),
+        jac=sol.jac,
+        free=free,
+        bounds_used={n: table[n] for n in free},
+    )
+
+
+def diode_sensitivity_report(
+    params: Params,
+    data: DiodeCurveSet,
+    free: Sequence[str],
+    *,
+    rel_step: float = 1e-3,
+) -> dict[str, float]:
+    """Mean |d ln i_sd / d ln p| over the diode dataset, evaluated before fitting.
+
+    Same semantics as :func:`sensitivity_report` (one-sided absolute probe at
+    zero-bounded parameters), but evaluates vdmos_diode at each point's own
+    temperature.
+    """
+    base = vdmos_diode(data.v_sd, params, t_c=data.temp_c)
+    scale = np.maximum(np.abs(base), 1e-12)
+    out: dict[str, float] = {}
+    for name in free:
+        p0 = getattr(params, name)
+        lo_b = BOUNDS.get(name, (-np.inf, np.inf))[0]
+        if abs(p0) > 1e-12 and p0 - rel_step * abs(p0) >= lo_b:
+            step = rel_step * abs(p0)
+            up = vdmos_diode(data.v_sd, params.replace(**{name: p0 + step}), t_c=data.temp_c)
+            dn = vdmos_diode(data.v_sd, params.replace(**{name: p0 - step}), t_c=data.temp_c)
+            sens = np.abs(up - dn) / (2.0 * step) / scale * abs(p0)
+        else:
+            step = rel_step
+            up = vdmos_diode(data.v_sd, params.replace(**{name: p0 + step}), t_c=data.temp_c)
+            sens = np.abs(up - base) / step / scale
+        out[name] = float(np.mean(sens))
+    return out
 
 
 @dataclass(frozen=True)

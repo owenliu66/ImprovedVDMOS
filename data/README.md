@@ -14,6 +14,10 @@ v_gs,v_ds,i_d
 One row per measured point (flat, not a grid) — digitised datasheet curves are
 ragged and different curves have different lengths.
 
+Body-diode files use their own header contract, `index,I_sd,v_sd,T` (T in
+degC) — the datasheet diode spec is current-referenced and multi-temperature;
+`load_diode_csv()` reads it into a `DiodeCurveSet`.
+
 ## Suggested filenames
 
 ```
@@ -71,7 +75,26 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
 - **Removed point:** (v_gs = 0, v_ds = 650 V, i_d = 1 µA) was digitised but
   removed — the channel model has no high-voltage leakage element yet, and no
   single conductance could give both 1 µA at 650 V (1.5 nS) and 250 µA at
-  3.7 V (68 µS) anyway. Real HV leakage waits for the body diode / a
-  dedicated leakage element.
+  3.7 V (68 µS) anyway. Real HV leakage waits for a dedicated leakage
+  element (the body diode landed in session 12 and sets a µA-scale
+  Shockley floor, but not the 650 V blocking characteristic).
 - **No Rds(on)-vs-v_gs curve exists in this datasheet** (checked); the
   r_d/r_s-vs-channel split stays weakly identified without it.
+
+### ST8L65N044M9_diode.csv
+
+- **Device:** ST8L65N044M9 — body-diode forward characteristics.
+- **Source:** digitised from the datasheet body-diode forward voltage curves
+  at three temperatures. No `.meta.txt` sidecar — this entry is the
+  provenance record.
+- **Contents:** 30 points, header `index,I_sd,v_sd,T` (`load_diode_csv`
+  matches columns by header, case-insensitive; `index` ignored). Ten current
+  points 5–55 A at each of T = 25, 150, −55 °C; v_sd 0.56–1.05 V.
+- **Sign convention:** source-referenced (anode = source): `i_sd` flows
+  source → drain, `v_sd = −v_ds` in the model's drain-referenced convention.
+- **Identifiability limit to remember:** the data starts at 5 A — there is
+  **no low-current tail**, so the saturation prefactors (i_s, and i_sr even
+  more) are weakly determined; only the (k_n, i_s) pair, r_diode, i_kf and
+  v_eg reproduce the curves. The temperature law (Xti/Eg) IS pinned by the
+  three temperatures (v_eg ≈ 1.10 eV ≈ silicon). Fit protocol:
+  `scripts/fit_st8l65_diode.py`.
