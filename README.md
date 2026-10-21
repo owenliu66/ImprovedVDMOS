@@ -188,8 +188,8 @@ flows through the package resistances, and the two implicit solves
 
 ```
    drain o──[r_d]──(D')══════ channel ══════(S')──[r_s]──┬─o source
-                     │                                  │
-                     └───────── diode + r_diode ─────────┘   anode = source
+         │                                               │
+         └───────── diode + r_diode ─────────────────────┘   anode = source
 
 i_d = i_ch(v_ds > 0) − i_di(v_sd = −v_ds)
 
@@ -300,7 +300,8 @@ cond 2.19e3**; diode **3.91 % on 30 points (−55/25/150 °C), v_eg =
 b_rdiode = −1.78e-5/°C²**,
 128 tests green (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
-not a fit failure. Remaining gaps: Q(V), HV
+not a fit failure. Remaining gaps: Q(V) (design
+settled — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)), HV
 leakage, thermal node, LTspice export — details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
@@ -317,7 +318,9 @@ ImprovedVDMOS/
 │   ├── fit.py              least_squares extraction + identifiability (+ fit_diode)
 │   ├── reference.py        official fitted device records (channel + diode)
 │   ├── plotting.py         output/transfer/gds/overlay plots
-│   └── cli.py              `vdmos-fit` command
+│   ├── cli.py              `vdmos-fit` command
+│   ├── STATUS.md           session log, open problems, missing architecture
+│   └── CAP_SPEC.md         settled capacitance/charge-model design spec
 ├── tests/                  pytest suite (model regressions + fit round-trips,
 │                           test_diode.py incl. LTspice cross-validation)
 ├── scripts/                thin entry points (no logic here)

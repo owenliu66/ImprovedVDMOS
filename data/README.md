@@ -18,6 +18,12 @@ Body-diode files use their own header contract, `index,I_sd,v_sd,T` (T in
 degC) — the datasheet diode spec is current-referenced and multi-temperature;
 `load_diode_csv()` reads it into a `DiodeCurveSet`.
 
+Capacitance files use the header contract `index,V_ds,Cap (pF),Type` with
+`Type ∈ {iss,oss,rss}` — one row per digitized point, all three branches in
+one file (the delta decomposition c_gd = Crss, c_gs = Ciss − Crss,
+c_ds = Coss − Crss is the model contract, see `src/vdmos_fit/CAP_SPEC.md`).
+Gate-charge files (to be digitized) will use `index,Q_g,V_gs,condition`.
+
 ## Suggested filenames
 
 ```
@@ -100,3 +106,28 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   the curves. The temperature law (Xti/Eg) IS pinned by the
   three temperatures (v_eg ≈ 1.08 eV ≈ silicon). Fit protocol:
   `scripts/fit_st8l65_diode.py`.
+
+### ST8L65N044M9_Cap_Vds.csv / IMCQ120R004M2H_Cap_Vds.csv / ISC040N10NM8_Cap_Vds.csv
+
+- **Devices / source:** digitized typical-capacitance curves (C = f(V_DS),
+  V_GS = 0) from the three datasheets — ST8L65N044M9 super-junction 650 V
+  (Figure 7, f = 250 kHz, print code GPDP160620251505CVR); IMCQ120R004M2H
+  CoolSiC 1200 V (f = 100 kHz); ISC040N10NM8 trench 100 V (Diagram 11,
+  f = 1 MHz). No `.meta.txt` sidecars — these entries are the provenance
+  record. All 25 °C typical; no temperature dependence available.
+- **Contents:** header `index,V_ds,Cap (pF),Type`, Type ∈ {iss,oss,rss};
+  46 / 36 / 28 points. Digitized with `curve_digitizer` (log-log axis
+  calibration).
+- **Model contract:** see `src/vdmos_fit/CAP_SPEC.md` (settled design:
+  charge-master LUTs, PCHIP on ln C vs linear v, c_gd(v_gd) splice at
+  v_gd = 0 with exponential-saturation branch).
+- **Data oddities kept, not cleaned:** (a) ST8L65 `iss` has four identical
+  points (4869.28716 pF — gridline snap; harmless for PCHIP, clean on next
+  re-digitization); (b) the SiC plot's x-axis starts at 1 V, so the origin
+  anchor (C0, slope) is an extrapolation (±10–15 %); (c) the SJ `rss` branch
+  is genuinely non-monotonic (rises again above ~200 V) — real SJ physics,
+  not a digitization error.
+- **Cross-checks on record:** trench `rss` fits the graded-junction law
+  C₀(1+v/V_bi)^−M with M = 0.721, V_bi = 6.41 V (max residual 10.6 %);
+  the same law fails on SiC/SJ (table approach confirmed). Near-origin
+  quadratic anchors (first-4-point convention) are tabulated in CAP_SPEC.md.

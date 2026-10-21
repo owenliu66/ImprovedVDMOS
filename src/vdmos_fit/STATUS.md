@@ -478,8 +478,15 @@ reproduces the session-14 4.15 % protocol as the standing baseline, next to
   out of scope session 12).
 - **Body-diode Qrr / capacitance** (Cjo/Vj/M, Tt) — static diode I–V is in;
   recovery and junction charge are not.
-- **Q(V) charge model** (charge-based capacitors via symbolic differentiation)
-  and the `Tj` thermal node for Cauer-ladder co-simulation (the diode `t_c`
+- **Q(V) charge model** — design **settled 2026-10-18**, see
+  [`CAP_SPEC.md`](CAP_SPEC.md): charge-master LUTs (PCHIP on ln C vs linear v)
+  from digitized Ciss/Coss/Crss for three parts (data on disk),
+  `c_gd(v_gd)` = off-state table for v_gd < 0 + exponential-saturation branch
+  for v_gd ≥ 0 spliced C0/C1 at v_gd = 0 (A tied to Cmax by C1), Cmax seeded
+  at c_gs(0) and extracted from the Qg plateau charge. Code not started;
+  implementation checklist in CAP_SPEC.md §Code TODO. Channel-charge v_gs
+  blend deferred (first suspect if turn-on simulates too fast). The `Tj`
+  thermal node for Cauer-ladder co-simulation remains open (the diode `t_c`
   argument is the placeholder interface for Tj).
 - **LTspice export**: fitted parameters → `.subckt`/`.model` for A/B (the
   diode part is already LTspice-exact: `D(Is=… N=… Isr=… Nr=… Ikf=… Rs=…
