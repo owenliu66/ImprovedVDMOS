@@ -74,7 +74,9 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth: `names.xlsx`)
 | `i_` | current [A] | `i_d` |
 | `r_` | resistance [Ω] | `r_d`, `r_s` |
 | `g_` | conductance [S] | `g_k` — trench-kink conductance, *not* transconductance |
-| `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda` |
+| `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_agd` |
+| `c_` | capacitance [F] | `c_gd`, `c_gs`, `c_ds`, `c_gd0`, `c_gdmax` (CAP_SPEC) |
+| `q_` | charge [C] | `q_gd`, `q_gs`, `q_ds` — the charge-master state variables |
 
 - Greek-letter parameters take the `k_` prefix so no name collides with a
   Python keyword: θ → `k_theta`, η → `k_eta`, λ → `k_lambda` (bare `lambda` is
@@ -298,11 +300,13 @@ floor (plus the diode's reverse saturation when the diode is on). Current
 cond 2.19e3**; diode **3.91 % on 30 points (−55/25/150 °C), v_eg =
 1.082 eV ≈ silicon bandgap, TCs a_ikf = +0.83 %/°C / a_rdiode = +0.48 %/°C /
 b_rdiode = −1.78e-5/°C²**,
-128 tests green (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
+145 tests green (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
-not a fit failure. Remaining gaps: Q(V) (design
-settled — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)), HV
-leakage, thermal node, LTspice export — details and open problems in
+not a fit failure. The Q(V) charge model **landed** (charge-master LUTs +
+c_gd splice + c_gdmax extraction from Qg + LTspice nonlinear-cap export with
+live parity — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)).
+Remaining gaps: HV
+leakage, thermal node, full-device LTspice subckt — details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
 ## Layout
@@ -313,10 +317,12 @@ ImprovedVDMOS/
 ├── src/vdmos_fit/          the importable package
 │   ├── model.py            vdmos_id(), vdmos_id_level1(), package-R solver
 │   ├── diode.py            vdmos_diode(), LTspice diode DC branch + r_diode solver
+│   ├── caps.py             charge-master C–V LUTs + c_gd splice + c_gdmax extraction
 │   ├── params.py           Params dataclass, bounds, log-space packing
-│   ├── data.py             CurveSet / DiodeCurveSet, CSV I/O, synthetic data
+│   ├── data.py             CurveSet / DiodeCurveSet / CapCurveSet / QgCurveSet, CSV I/O
 │   ├── fit.py              least_squares extraction + identifiability (+ fit_diode)
-│   ├── reference.py        official fitted device records (channel + diode)
+│   ├── reference.py        official fitted device records (channel + diode + caps)
+│   ├── ltspice.py          LTspice export: charge-master nonlinear-cap subckt
 │   ├── plotting.py         output/transfer/gds/overlay plots
 │   ├── cli.py              `vdmos-fit` command
 │   ├── STATUS.md           session log, open problems, missing architecture
@@ -336,7 +342,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 128 tests green (digitizer Tk window tests self-skip headless)
+pytest                            # 145 tests green (digitizer Tk window tests self-skip headless)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```

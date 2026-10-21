@@ -1,13 +1,14 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-17 (session 15 — Trs2 quadratic r_diode TC b_rdiode,
-LTspice-exact; probe shows the 150 °C residual is a 5 A digitization point,
-not Rs curvature; session 14 promoted the TC record). Companion to
-[README.md](../../README.md).*
+*Snapshot: 2026-10-21 (session 17 — capacitance/charge model LANDED: `caps.py`
+charge-master LUTs + c_gd splice, `extract_cmax()` on digitized Qg curves,
+`CAP_*` records, `ltspice.py` nonlinear-cap export with live LTspice parity;
+session 16 settled the design and digitized the data — see CAP_SPEC.md).
+Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Fifteen sessions, all committed to `main` (session 11 renamed every parameter
+Seventeen sessions, all committed to `main` (session 11 renamed every parameter
 to the `<type prefix>_<suffix>` convention — names.xlsx + README "Naming
 convention" are the mapping, tag `pre-rename-2026-10` is the escape hatch, and
 the rename is bit-identical; session 12 added the **body diode** —
@@ -26,6 +27,14 @@ recorded in the Trs2 section below: the gain over the linear-TC record is
 modest (4.15 → 3.91 %), the five-knob TC/knee block is strongly correlated
 (|corr| up to 0.985), and the stubborn 150 °C residual is a ~12 mV
 digitization error on the 5 A point, not missing series-R physics.
+Session 16 settled the **capacitance/charge design** (CAP_SPEC.md) and
+digitized the C–V + Qg data for three parts; session 17 **landed the model**
+(`caps.py`: PCHIP-on-lnC charge-master LUTs, first-4-point origin anchor,
+exp-saturation splice, `extract_cmax()` from the Qg curves — headline:
+all three parts extract at c_gdmax ≈ c_gd0, the seed over-predicts 4–8×,
+and the Miller-plateau deficit quantifies limitation 1) plus the
+**LTspice export** (`ltspice.py`: charge-master nonlinear capacitors,
+Q= ramp-sum of sampled q(v); live parity ≤0.3 % on all three parts).
 The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (v_ovmax, k_ovsharp),
 mobility degradation via v_knee, velocity saturation, bounded DIBL, gated CLM,
@@ -46,9 +55,10 @@ and `on_bounds` flags pinned parameters relative to the bound's magnitude, not
 the search-box width. Current OFFICIAL fits on
 ST8L65N044M9: channel **3.79 % relative RMSE (fit A, 10-param with `k_kneesharp` free, full
 41-point set, rank 8/10, cond 2.19e3)**; diode **4.78 % on 30 points
-(−55/25/150 °C), rank 4/4, cond 6.1e3, v_eg = 1.097 eV**. 120 tests green,
-ruff clean. Datasheet Figure 3 (typical output curves) and the body-diode
-forward characteristics CSV are on disk in `data/`.
+(−55/25/150 °C), rank 4/4, cond 6.1e3, v_eg = 1.097 eV**. 145 tests green,
+ruff clean. Datasheet Figure 3 (typical output curves), the body-diode
+forward characteristics CSV, and the three-part C–V + Qg CSVs are on disk
+in `data/`.
 
 ## What exists
 
@@ -57,18 +67,23 @@ Projects/ImprovedVDMOS/
 ├── pyproject.toml          deps, pytest, ruff config, `vdmos-fit` console script
 ├── README.md               model + corrected Level-1 analysis
 ├── .gitignore
-├── src/vdmos_fit/          model, diode, params, data, fit, plotting, reference
-│                           (official device records), cli, __main__
+├── src/vdmos_fit/          model, diode, caps, params, data, fit, plotting,
+│                           reference (official device records), ltspice export,
+│                           cli, __main__
 ├── tests/                  test_model, test_fit, test_package_r, test_gate_cap,
 │                           test_drain_softness, test_st8l65_official, test_diode,
-│                           test_cli, test_digitizer
+│                           test_caps (incl. live LTspice parity), test_cli,
+│                           test_digitizer
 ├── scripts/                fit_datasheet.py, fit_st8l65.py (superseded),
 │                           fit_st8l65_nd.py (official channel recipe),
 │                           fit_st8l65_diode.py (official diode recipe),
+│                           fit_cmax.py (official c_gdmax extraction),
+│                           export_caps.py (LTspice subckt export),
 │                           roundtrip_demo.py
 ├── data/                   README.md + ST8L65N044M9_IV.csv (41 digitised points)
 │                           + ST8L65N044M9_diode.csv (30 pts, −55/25/150 °C)
 │                           + ST8L65N044M9_Id_Vds_Vgs.png (datasheet Figure 3)
+│                           + <part>_Cap_Vds.csv ×3 + <part>_Vgs_Qg.csv ×3
 └── notebooks/              README.md only (empty)
 ```
 
@@ -104,8 +119,8 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **128 tests, all passing** (2 Tk digitizer window tests self-skipped in the
-  last full run); `ruff check` clean. Caveat: 8 of the digitizer
+- **145 tests, all passing** (0–2 Tk digitizer window tests self-skip when
+  the process has no display); `ruff check` clean. Caveat: 8 of the digitizer
   window tests drive Tk and self-skip when the process has no display — in
   headless runs 0–2 of them skip (flaky per-process), so "N passed, M skipped"
   totals vary; don't pin the count.
@@ -478,19 +493,43 @@ reproduces the session-14 4.15 % protocol as the standing baseline, next to
   out of scope session 12).
 - **Body-diode Qrr / capacitance** (Cjo/Vj/M, Tt) — static diode I–V is in;
   recovery and junction charge are not.
-- **Q(V) charge model** — design **settled 2026-10-18**, see
-  [`CAP_SPEC.md`](CAP_SPEC.md): charge-master LUTs (PCHIP on ln C vs linear v)
-  from digitized Ciss/Coss/Crss for three parts (data on disk),
-  `c_gd(v_gd)` = off-state table for v_gd < 0 + exponential-saturation branch
-  for v_gd ≥ 0 spliced C0/C1 at v_gd = 0 (A tied to Cmax by C1), Cmax seeded
-  at c_gs(0) and extracted from the Qg plateau charge. Code not started;
-  implementation checklist in CAP_SPEC.md §Code TODO. Channel-charge v_gs
-  blend deferred (first suspect if turn-on simulates too fast). The `Tj`
+- **Q(V) charge model** — design settled AND LANDED 2026-10-18/21
+  (Phases 1–4): see [`CAP_SPEC.md`](CAP_SPEC.md). `caps.py` builds
+  charge-master LUTs
+  (PCHIP on ln C vs linear v, GL-5 quadrature, clamp policy) from the
+  digitized Ciss/Coss/Crss of three parts, with the `c_gd(v_gd)` splice
+  (off-state table for v_gd < 0 + exponential-saturation branch for
+  v_gd ≥ 0, C0/C1 at the splice, k_agd tied to c_gdmax) and
+  `extract_cmax()` on the digitized Qg curves (`scripts/fit_cmax.py`,
+  `CAP_*` records in reference.py, 17 tests in test_caps.py).
+  **Headline result: all three parts extract at c_gdmax ≈ c_gd0 (flat exp
+  branch); the seed c_gs(0) over-predicts 4–8×.** The channel charge the
+  off-state tables miss shows up as the Miller-plateau DEFICIT (measured
+  minus table prediction): SJ +61 %, trench +22–43 %, SiC +10 % — the
+  quantified target for the deferred v_gs-dependent blend (first suspect if
+  double-pulse turn-on simulates too fast). Phase 4 (delta subckt export +
+  parity) landed 2026-10-21 via `ltspice.py` — see the LTspice-export
+  bullet below. The `Tj`
   thermal node for Cauer-ladder co-simulation remains open (the diode `t_c`
   argument is the placeholder interface for Tj).
-- **LTspice export**: fitted parameters → `.subckt`/`.model` for A/B (the
-  diode part is already LTspice-exact: `D(Is=… N=… Isr=… Nr=… Ikf=… Rs=…
-  Tnom=… Xti=… Eg=…)`).
+- **LTspice export**: the capacitance delta is exported and verified —
+  `ltspice.py` writes a `.subckt <name> G D S` of three charge-master
+  **nonlinear capacitors** (`Cxxx n1 n2 Q=<expr>`, LTspice's one charge
+  primitive; `scripts/export_caps.py` emits `out/<part>_caps.subckt` at
+  the extracted c_gdmax records). The Q= expression is the **incremental
+  ramp-sum** form of the sampled charge table, `q0 + m₁·(x−x₀) +
+  Σ Δm·max(0,x−x_k)`: LTspice's symbolic dQ/dx is then exactly the
+  piecewise-constant C staircase, and the end-segment slopes carry the
+  clamp-C policy for free. Live parity (`test_caps.py::test_ltspice_caps_parity`,
+  PWL-ramp drive, three delta configurations): 14 meas points per part
+  match the exported staircase to ≤0.3 % (most ≤0.05 %) for all three
+  parts; staircase-vs-PCHIP ≤0.4 %. LTspice 26.0.1 gotchas on record:
+  `table()` in a B source is rejected outright, and `table()` inside Q=
+  compiles but its symbolic derivative is garbage (~1e11 A) — hence the
+  ramp-sum form. Still open: the full-device subckt (channel B source +
+  diode + r_d/r_s wiring) for A/B simulation — the diode part is already
+  LTspice-exact: `D(Is=… N=… Isr=… Nr=… Ikf=… Rs=…
+  Tnom=… Xti=… Eg=…)`.
 - **CI**. (`notebooks/` is empty scaffolding.)
 - Validation target remains double-pulse Eon/Eoff within ~10 %, which static
   fitting alone cannot deliver.

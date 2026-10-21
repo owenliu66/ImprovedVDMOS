@@ -27,6 +27,7 @@ values are unchanged and still reproduce the published RMSE exactly.)
 
 from __future__ import annotations
 
+from .caps import CapParams, OriginAnchor
 from .params import Params
 
 __all__ = [
@@ -36,6 +37,13 @@ __all__ = [
     "ST8L65_DIODE",
     "ST8L65_DIODE_RMSE_REL",
     "ST8L65_DIODE_FREE",
+    "CAP_ST8L65",
+    "CAP_IMCQ120",
+    "CAP_ISC040",
+    "CAP_ANCHOR_ST8L65",
+    "CAP_ANCHOR_IMCQ120",
+    "CAP_ANCHOR_ISC040",
+    "CAP_PLATEAU_DEFICIT_REL",
 ]
 
 # Free set of the promoted fit (order matters only for readability).
@@ -119,3 +127,54 @@ ST8L65_DIODE = Params(
     k_xti=3.0,
     v_eg=1.08196,
 )
+
+# ---------------------------------------------------------------------------
+# Capacitance / charge (CAP_SPEC.md; extraction scripts/fit_cmax.py,
+# 2026-10-18): origin anchors (first-4-point quadratic convention) and the
+# extracted c_gdmax per part. The tables themselves are NOT duplicated here --
+# they are rebuilt from data/<part>_Cap_Vds.csv; these records pin the splice
+# parameters and the diagnostics that go with them.
+#
+# HEADLINE FINDING (quote the CURVE, not the split): all three parts land at
+# c_gdmax ~ c_gd0 -- the exponential-saturation branch is nearly FLAT, and
+# the seed c_gdmax = c_gs(0) over-predicts by 4-8x. The Qg segment-3 slope
+# says C_gs + C_gd(end) ~ the c_gs table alone, i.e. these datasheets give no
+# evidence for an LTspice-style Cgdmax >> Cgdmin channel cap. The channel
+# charge the off-state tables miss shows up instead as the Miller-plateau
+# DEFICIT (measured plateau charge minus table prediction, CAP_SPEC
+# limitation 1): worst on the super-junction part (+61 %), then trench
+# (+22-43 %), smallest on SiC (+10 %). That deficit -- not c_gdmax -- is the
+# quantity the deferred v_gs-dependent blend must eventually explain.
+#
+# IMCQ120 c_gdmax is CLAMPED at the lower bracket (flat branch): the measured
+# segment-3 charge is below even the flat-branch prediction under the c_gs
+# table convention (spec diagnostic step 4). ISC040 c_gdmax is the median of
+# three conditions (647 / 798 / 663 pF raw). ST8L65's raw 2750 pF is within
+# digitiser noise of its c_gd0 (the V_on=0 probe clamps it LOWER).
+# ---------------------------------------------------------------------------
+
+CAP_ANCHOR_ST8L65 = OriginAnchor(
+    c_gd0=2.700257e-09, s_gd0=1.515041e-10, b2=-2.710536e-10,
+)
+CAP_ANCHOR_IMCQ120 = OriginAnchor(
+    c_gd0=3.822921e-09, s_gd0=6.637159e-10, b2=4.088134e-11,
+)
+CAP_ANCHOR_ISC040 = OriginAnchor(
+    c_gd0=4.908948e-10, s_gd0=5.391591e-11, b2=3.350697e-12,
+)
+
+CAP_ST8L65 = CapParams(c_gd0=2.700257e-09, s_gd0=1.515041e-10,
+                       c_gdmax=2.750175e-09)
+CAP_IMCQ120 = CapParams(c_gd0=3.822921e-09, s_gd0=6.637159e-10,
+                        c_gdmax=3.822921e-09)   # clamped LOWER (flat branch)
+CAP_ISC040 = CapParams(c_gd0=4.908948e-10, s_gd0=5.391591e-11,
+                       c_gdmax=6.628331e-10)    # median of 3 conditions
+
+# Plateau deficit / measured plateau charge, per part (worst condition):
+#   ST8L65 (400 V): +61.2 %; IMCQ120 (800 V): +9.7 %;
+#   ISC040 (20/50/80 V): +42.8 / +24.5 / +22.0 %.
+CAP_PLATEAU_DEFICIT_REL = {
+    "ST8L65N044M9": 0.612,
+    "IMCQ120R004M2H": 0.097,
+    "ISC040N10NM8": 0.428,
+}

@@ -88,34 +88,54 @@ table approach is confirmed for SiC and SJ.
    help example: Cgs = 3.1 nF, Cgdmax = 1.9 nF).
 2. **Bracket:** `C0 ≤ Cmax ≤ 2·c_gs(0)` (fitter bounds).
 3. **Extraction from the Qg curve (the real answer — a datasheet measurement,
-   no hardware needed).** During the Miller plateau v_gs ≈ V_gp is constant,
-   C_gs charges nothing, and the whole plateau charge flows through C_gd along
-   v_gd: V_gp − V_DS → V_gp. Split at v_gd = 0 (v_ds = V_gp):
+   no hardware needed).** CORRECTED SPLIT (2026-10-18, implementation day):
+   the Miller plateau ENDS at v_gd = 0 (v_ds falls to v_gs), so the plateau
+   trajectory never enters the exp branch — the plateau charge is a PURE
+   table-branch prediction and carries NO c_gdmax information. It VALIDATES
+   the tables:
 
    ```
-   Q_plateau_meas = ∫_{V_gp}^{V_DS} Crss(v) dv        (table branch — from the LUT)
-                  + Cmax·V_gp − (Cmax−C0)(1−e^{−A·V_gp})/A    (exp branch — solve for Cmax)
+   Q_plateau_meas  ?=  ∫_0^{V_DS−V1} Crss(v) dv + ∫_{V1}^{V2} c_gs(v) dv
+   ```
+
+   (V1, V2 = plateau start/end voltages; the c_gs term is the sloped-plateau
+   recharge — a flat-plateau behavioral model would miss it.) c_gdmax is
+   extracted from the POST-PLATEAU segment (v_gd > 0, v_ds → i_d·Rds(on)):
+
+   ```
+   remainder = (Q_end − Q2) − ∫_{V2}^{V_end} c_gs(v) dv
+   remainder = Cmax·V − (Cmax−C0)(1−e^{−A·V})/A,   V = V_end − i_d·Rds(on)
    ```
 
    Everything except Cmax is known from the digitized C–V tables; solve the
-   scalar equation (nonlinear through A(Cmax); 1-D bisection/Newton).
-4. **Diagnostic:** if Q_plateau_meas < table integral (negative difference),
-   the off-state table over-counts (quasi-static mismatch: 250 kHz C–V vs the
-   slower Qg test; real on SJ parts) or V_gp was misread. Then clamp
-   Cmax = C0 (flat branch) and record the discrepancy — do not chase a
-   negative charge.
+   scalar equation (nonlinear through A(Cmax); 1-D bracketed brentq).
+4. **Diagnostic:** if the remainder is BELOW the flat-branch value
+   q_exp(V; Cmax = C0) (negative channel contribution under the c_gs table
+   convention), clamp Cmax = C0 (flat branch) and record the discrepancy —
+   do not chase a negative charge. Symmetrically, remainder above
+   q_exp(V; 2·c_gs(0)) clamps UPPER. Both paths implemented and tested.
 5. **Quote the curve, not the split:** Cmax and s are correlated in this
    extraction (bigger measured slope → smaller needed Cmax), and s is the
    noisiest number in the model. Same rule as the diode fit.
 
-Predicted exp-branch plateau excess charge (beyond the table integral) at the
-seed, for sanity-checking when Qg data arrives:
+RESULTS (2026-10-18, scripts/fit_cmax.py; records in reference.py):
 
-| part | V_gp = 6 V | 8 V | 10 V |
-|---|---|---|---|
-| ST8L65 | 18.6 nC | 25.7 nC | 33.1 nC |
-| IMCQ120 | 33.2 nC | 48.0 nC | 64.3 nC |
-| ISC040 | 3.9 nC | 5.6 nC | 7.4 nC |
+| part | plateau Qgs err | plateau deficit (meas − table) | c_gdmax extracted | vs seed |
+|---|---|---|---|---|
+| ST8L65 (400 V, 29 A) | +4.1 % | **+61.2 %** | 2750 pF (≈ c_gd0) | 0.56× seed |
+| IMCQ120 (800 V, 185 A) | +16.2 % | +9.7 % | 3823 pF = c_gd0 (LOWER clamp) | 0.29× seed |
+| ISC040 (20/50/80 V, 12.5 A) | −4.5…−1.0 % | +42.8/+24.5/+22.0 % | 663 pF (median of 647/798/663) | 0.22× seed |
+
+HEADLINE: **all three parts land at c_gdmax ≈ c_gd0 — the exp branch is
+nearly FLAT; the seed c_gs(0) over-predicts 4–8×.** These Qg curves give no
+evidence for an LTspice-style Cgdmax ≫ Cgdmin channel cap. The channel charge
+the off-state tables miss shows up instead as the Miller-PLATEAU DEFICIT
+(limitation 1): worst on the SJ part (+61 %, its plateau is nearly flat =
+huge effective Miller capacitance), then trench, smallest on SiC. That
+deficit — not c_gdmax — is the quantity the deferred v_gs-dependent blend
+must eventually explain. r_ds_on for the ohmic tail is a documented
+datasheet-class assumption (36/4/40 mΩ part-code classes); the V_on = 0
+probe moves c_gdmax by < 10 % (ISC040) to a LOWER clamp (ST8L65).
 
 Sensitivity is bounded: the exp branch only acts for v_ds < v_gs (last slice
 of the plateau + ohmic), and the extra charge scales ~linearly with Cmax —
@@ -156,13 +176,14 @@ final arbiter.
    LTspice VDMOS's constant-Cgs approximation; the SJ iss branch is flat by
    construction (accumulation plateau).
 
-## Qg data contract (to digitize)
+## Qg data contract (digitized 2026-10-18)
 
 V_GS vs Q_g at specified V_DS, I_D (standard quasi-static gate-charge test).
-CSV: `index,Q_g,V_gs,condition` (condition = `Vds=..V,Id=..A`). Extract:
-V_gp (plateau voltage), Qgs (charge to plateau start), Qgd (plateau span).
-Uses: Cmax extraction (§Cmax), Qgd vs ∫Crss dv cross-check, and (later) V_gp as
-the anchor for any channel-charge model.
+CSV: `index,Q_g(nC),V_gs,condition` (condition = `I_d=..A, V_ds=..V`; header
+match ignores case and spaces). Extract: V_gp (plateau voltage), Qgs (charge
+to plateau start), Qgd (plateau span). Uses: c_gdmax extraction (§Cmax, via
+the post-plateau segment), plateau validation (deficit = limitation-1
+quantifier), and (later) V_gp as the anchor for any channel-charge model.
 
 ## Validation plan
 
@@ -181,45 +202,65 @@ style: `c_gdmax` [F], `c_gd0` [F], `k_agd` [1/V] (= A above; unitless-except-1/V
 like the k_lambda trio). `db`-style ambiguity does not arise: `gd`/`gs`/`ds`
 are terminal-pair names here.
 
-## Code TODO (implementation checklist — not yet done)
+## Code TODO (implementation checklist)
 
-Phase 0 — data (not code):
-- Digitize Qg curves for all three parts; write `.meta.txt` sidecars (figure
-  number, frequency, test condition) for the three Cap CSVs.
+**LANDED 2026-10-18: Phases 1–3 + tests + records. LANDED 2026-10-21:
+Phase 4 (LTspice export + parity).**
+Phase 1: `CapCurveSet`/`QgCurveSet`, `load_cap_csv`/`load_qg_csv` (+savers)
+in `data.py`. Phase 2: `caps.py` — `_BranchTable` (PCHIP on ln C, GL-5
+quadrature, clamp policy), `OriginAnchor` (first-4-point convention),
+`CapParams` (c_gd0, s_gd0, c_gdmax; k_agd derived; flat-branch limit),
+`CapModel` (c_gd/q_gd composite with origin-quadratic head, c_gs/c_ds union-
+node difference tables). Phase 3: `extract_cmax` (plateau detection by max
+dQ/dV, segment decomposition, bracketed brentq, LOWER/UPPER clamp
+diagnostics) + `scripts/fit_cmax.py`. Records: `CAP_*` in `reference.py`;
+tests: `tests/test_caps.py` (CSV contracts, decomposition positivity, dq/dv
+≡ C identity, splice C0/C1, monotonicity through the SJ cliff, clamp policy,
+trench junction anchor, pinned extraction records, synthetic clamp
+diagnostics).
+
+Phase 4 (`ltspice.py` + `scripts/export_caps.py`): the delta exports as a
+`.subckt <name> G D S` of three **charge-master nonlinear capacitors**
+(`Cxxx n1 n2 Q=<expr>` — LTspice's one primitive that IS a charge master;
+`x` = device voltage, symbolic dQ/dx = capacitance). The Q= expression is
+the **incremental ramp-sum** form of the sampled charge table:
+
+```
+q(x) = q0 + m1·(x − x0) + Σ_k (m_{k+1} − m_k)·max(0, x − x_k)
+```
+
+(m_k = charge-table segment slopes, table sampled at N_SUB=12 subdivisions
+per digitised node interval). LTspice's symbolic derivative is then exactly
+the piecewise-CONSTANT C staircase, and the end-segment slopes extend the
+clamp-C policy (flat C, linearly growing q) for free — no extension nodes,
+no B-source d().
+
+LTspice 26.0.1 gotchas (measured 2026-10-21, on the record):
+- `table()` in a B source: rejected — "Function not supported in this
+  context".
+- `table()` inside Q=: compiles, but its symbolic derivative is GARBAGE
+  (measured currents ~1e11 A). Never use.
+- Absolute-slope ramp sums (no increments): wrong — they SUM segment slopes
+  instead of stepping them (caught by parity at exactly 5×/n× factors).
+- `.MODEL name C (C=...)` nonlinear-capacitor model form: rejected as
+  "Unknown parameter" on the instance.
+
+Parity (validation step 5, `test_caps.py::test_ltspice_caps_parity` +
+live runs on all three parts): PWL-ramp drive, three delta configurations
+(A drives G with D=S=0 → c_gs+c_gd; B drives G=D with S=0 → c_gs+c_ds;
+C drives D with G=S=0 → c_ds+c_gd(−v) — the delta cannot isolate one branch
+by DC wiring), 14 `.meas tran FIND` points per part at segment midpoints
+(FIND must land strictly INSIDE staircase segments — a target on a knot
+measures the solver's blend; and maxstep must keep the Gear-2 companion's
+q-history window ≪ the segment width). Results: measured vs exported-
+staircase ≤0.3 % (most ≤0.05 %); staircase vs PCHIP model C ≤0.4 %
+(incl. the SJ cliff). Sign convention verified: I(Vdrive) = −dq/dt.
+
+Still open:
+- Full-device subckt (channel B source + diode + r_d/r_s + this delta)
+  for A/B switching simulation.
 - Clean the ST8L65 `iss` gridline-snap artifact (four identical 4869.28716 pF
   points) on the next re-digitization pass.
-
-Phase 1 — data plumbing (`data.py`):
-- `CapCurveSet` (v_ds, C, branch ∈ {iss,oss,rss}) + `load_cap_csv()` — header
-  contract `index,V_ds,Cap (pF),Type`, case-insensitive, group by Type, sort by
-  v_ds.
-- `load_qg_csv()` for `index,Q_g,V_gs,condition`.
-
-Phase 2 — core (`caps.py`, new module):
-- PCHIP-on-ln-C builder + per-segment GL quadrature → q(v), C(v)=dq/dv,
-  clamp policy.
-- Origin-anchor fit (quadratic, first 4 points of Crss) → c_gd0, s, b2.
-- `c_gd(v_gd)` composite + closed-form q on the exp branch:
-  `q_gd(v) = q_gd(0) + c_gdmax·v + (c_gdmax−c_gd0)/k_agd·(1 − e^{−k_agd·v})`.
-- `CapParams` dataclass per part (c_gd0, s, c_gdmax; k_agd derived), bounds
-  c_gdmax ∈ [c_gd0, 2·c_gs(0)]; log-space packing like `params.py`.
-
-Phase 3 — extraction (`fit.py` or `fit_cmax.py`):
-- `extract_cmax(qg_curve, cap_tables)`: plateau detection (V_gp, Qgd span),
-  table-integral subtraction, 1-D solve for c_gdmax; negative-difference
-  diagnostic → clamp + warning.
-- Cross-check report: Qgd vs ∫Crss dv, Qoss vs spec.
-
-Phase 4 — integration:
-- Wire the delta (q_gd(v_gs−v_d), q_gs(v_gs), q_ds(v_ds)) into the device
-  subckt / behavioral current sources i = dq/dv · dv/dt.
-- LTspice export: `.subckt` with `table()` caps; parity vs the Python model.
-- `reference.py`: `CAP_ST8L65` / `CAP_IMCQ120` / `CAP_ISC040` records + drift
-  checks (diode protocol style).
-
-Phase 5 — tests:
-- Decomposition positivity; splice C0/C1 (numerical derivative jump < tol);
-  dq/dv ≡ C identity; monotonicity through the SJ cliff; clamp behavior;
-  trench junction anchor (M ≈ 0.72, V_bi ≈ 6.4, residual ≤ 10.6 %);
-  c_gdmax bracket; origin-fit determinism (first-4-point window);
-  pinned RMSE-style bounds on the Qgd cross-check once Qg data exists.
+- v_gs-dependent blend for the plateau deficit (limitation 1) — now
+  QUANTIFIED per part by the deficit numbers above; it is the next mechanism
+  to build if double-pulse turn-on misses.

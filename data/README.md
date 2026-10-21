@@ -22,7 +22,9 @@ Capacitance files use the header contract `index,V_ds,Cap (pF),Type` with
 `Type ∈ {iss,oss,rss}` — one row per digitized point, all three branches in
 one file (the delta decomposition c_gd = Crss, c_gs = Ciss − Crss,
 c_ds = Coss − Crss is the model contract, see `src/vdmos_fit/CAP_SPEC.md`).
-Gate-charge files (to be digitized) will use `index,Q_g,V_gs,condition`.
+Gate-charge files use `index,Q_g(nC),V_gs,condition` (condition =
+`I_d=..A, V_ds=..V`, parsed per row so one file can hold several test
+curves; rows are polyline corner points).
 
 ## Suggested filenames
 
@@ -131,3 +133,18 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   C₀(1+v/V_bi)^−M with M = 0.721, V_bi = 6.41 V (max residual 10.6 %);
   the same law fails on SiC/SJ (table approach confirmed). Near-origin
   quadratic anchors (first-4-point convention) are tabulated in CAP_SPEC.md.
+
+### ST8L65N044M9_Vgs_Qg.csv / IMCQ120R004M2H_Vgs_Qg.csv / ISC040N10NM8_Vgs_Qg.csv
+
+- **Devices / source:** digitized gate-charge curves (V_GS vs Q_g at fixed
+  I_d, V_DS) from the same three datasheets. Polyline corner points only
+  (the datasheet specs are piecewise-linear): 4 / 4 / 10 rows (ISC040
+  carries three test conditions: V_DS = 20/50/80 V at I_d = 12.5 A).
+  ST8L65: I_d = 29 A, V_DS = 400 V. IMCQ120: I_d = 185.2 A, V_DS = 800 V
+  (labeled "turn-on pulse" in the datasheet — a dynamic test, so the
+  quasi-static decomposition is approximate; noted in CAP_SPEC).
+- **Model contract:** c_gdmax extraction + plateau validation via
+  `extract_cmax()` / `scripts/fit_cmax.py`; records `CAP_*` in
+  reference.py. Plateau detection = max-dQ/dV segment; the (0,0) origin
+  corner is prepended automatically when the digitized curve starts at the
+  plateau.

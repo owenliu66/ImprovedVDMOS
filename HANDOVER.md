@@ -1,90 +1,101 @@
-# Handover — ImprovedVDMOS session 15: Trs2 QUADRATIC r_diode TC (b_rdiode) — implemented, LTspice-verified, PROMOTED to the record
+# Handover — ImprovedVDMOS session 17: capacitance/charge model COMPLETE
+(caps.py + c_gdmax extraction + records + LTspice nonlinear-cap export +
+parity + names.xlsx + docs — committed)
 
-Sessions 12-14 (body diode, pending-list closure, TC promotion) are COMPLETE
-and committed; their handover content was replaced by this file. Escape hatch
-for the session-11 rename: tag `pre-rename-2026-10`.
+Session 16 (design settled, data digitized, docs + data.py plumbing) and
+session 17 (implementation + extraction + export + parity) are COMPLETE and
+committed. Durable findings live in STATUS.md + CAP_SPEC.md + reference.py.
+This file replaces the session-16 handover.
 
-## What session 15 did
+## What session 17 did (all verified, 145 tests green, ruff clean)
 
-User flag: "the improvement isn't as large as expected, especially the 150 C
-branch" -> add LTspice Trs2 (quadratic Rs TC). Names per names.xlsx row 46 +
-Prefix row 9 (`temp. coeff^2` -> prefix `b`): **`b_rdiode`** (the user's
-message said "b_rdrain" but the sheet resolves Trs2 -> b_rdiode, suffix
-matching a_rdiode/r_diode; flagged to user).
+1. **Confirmed session 16's partial code**: the `load_qg_csv` header bug was
+   already fixed (header keys normalized by removing spaces); `data.py`
+   loaders/savers tested (CSV round-trip tests).
+2. **`caps.py`** (CAP_SPEC Phase 2): `_BranchTable` (PCHIP on ln C, GL-5
+   quadrature, clamp-C policy), `origin_anchor` (first-4-point quadratic
+   convention, ANCHOR_N=4 pinned), `CapParams` (c_gd0, s_gd0, c_gdmax;
+   k_agd derived; flat-branch limit k_agd=inf), `CapModel` (c_gd/q_gd
+   composite with origin-quadratic head below the first rss node — exact
+   splice slope — and PCHIP above; c_gs/c_ds as union-node difference
+   tables). dq/dv ≡ C identity pinned by central-FD tests.
+3. **`extract_cmax` + `scripts/fit_cmax.py`** (Phase 3, corrected split):
+   plateau = max-dQ/dV segment; plateau charge is a PURE table-branch
+   validation (it ENDS at v_gd = 0); c_gdmax from the post-plateau segment
+   via bracketed brentq on q_exp(V_end − i_d·r_ds_on; c_gdmax) = remainder,
+   bracket [c_gd0, 2·c_gs(0)], LOWER/UPPER clamp diagnostics.
+   **RESULTS (records `CAP_*` in reference.py, drift-checked by
+   test_caps.py):** all three parts land at c_gdmax ≈ c_gd0 — the exp
+   branch is nearly FLAT, the seed c_gs(0) over-predicts 4–8×.
+   ST8L65 2750 pF (≈c_gd0), IMCQ120 3823 pF (LOWER clamp), ISC040 663 pF
+   (median of 647/798/663). Plateau deficits (limitation-1 quantifier):
+   SJ +61.2 %, SiC +9.7 %, trench +42.8/+24.5/+22.0 %.
+4. **`ltspice.py` + `scripts/export_caps.py`** (Phase 4): the delta exports
+   as `.subckt <name> G D S` of three **charge-master nonlinear capacitors**
+   (`Cxxx n1 n2 Q=<expr>`, `x` = device voltage). Q= is the **incremental
+   ramp-sum** of the sampled charge table:
+   `q0 + m1·(x−x0) + Σ (m_{k+1}−m_k)·max(0, x−x_k)` — LTspice's symbolic
+   dQ/dx is exactly the piecewise-constant C staircase (N_SUB=12 samples
+   per digitised interval), and the end-segment slopes carry the clamp-C
+   policy for free. Exports at the EXTRACTED records, not the seed.
+   **Live parity on all three parts** (PWL-ramp drive, 3 delta configs,
+   14 `.meas tran FIND` points each): measured vs exported staircase
+   ≤0.3 % (most ≤0.05 %); staircase vs PCHIP ≤0.4 % incl. the SJ cliff.
+   `test_caps.py::test_ltspice_caps_parity` runs it in the suite (skipped
+   only when LTspice is absent).
+5. **names.xlsx**: Prefix rows capacitance→`c`, charge→`q`; Sheet1 rows
+   c_gd/c_gs/c_ds, c_gdmax, c_gd0, k_agd, q_gd/q_gs/q_ds (VLOOKUP ranges
+   widened to $A$2:$B$11). README naming table + layout tree updated
+   (session 16's README claim had NOT been saved — it was stale).
+6. **Docs**: CAP_SPEC §Code TODO now records Phase 4 landed + the LTspice
+   gotchas below; STATUS snapshot → session 17; data/README Qg entries
+   (session 16 had added them — verified).
 
-1. **LTspice law PROBED** (help lists Trs2 but no formula):
-   `Rs(T) = Rs*(1 + Trs1*(T-Tnom) + Trs2*(T-Tnom)^2)`, Tnom-referenced --
-   Tikf=0.006 Trs1=0.008 Trs2=2e-5 card, .temp -55/25/100/150, 0.6/0.9 V:
-   agreement ~1e-5 relative at all 8 points. Linear-only misses up to 10.6 %
-   at 150 C; 27 C-referenced misses 0.1-0.8 %. Pinned by
-   `test_diode.py::test_ltspice_tc_laws` (extended: card now has Trs2, sweep
-   now includes 150 C).
-2. **Implementation:** params.py `b_rdiode` (default 0.0 = pure Trs1 law =
-   bit-identical to session 14; linear space; BOUNDS (-1e-4, +1e-3)/degC^2);
-   diode.py `_tc_factor(a, t_k, t_nom_k, b=0.0)` -- quadratic polynomial,
-   same `_TC_FLOOR` clamp (bracket proof dg <= -1 survives absurd
-   extrapolation; tested at t_c=1000 C with b=-1e-4). Channel untouched.
-3. **Tests:** +1 new (b_rdiode curvature direction + |dT|-growth of the
-   effect); TC identity/solver/guard/round-trip tests extended to b_rdiode
-   (round trip now 7 free, exact recovery; unit-column SVD rank 7/7 --
-   identifiability's raw report says 6/7, see gotchas).
-4. **Probe + PROMOTION (user override, 2026-10-17):**
-   4.148 -> **3.906 %** (per-T 2.37/3.16/5.49 vs 2.26/3.41/5.90),
-   b_rdiode = -1.784e-5 /degC^2, a_rdiode +0.48 %/degC, a_ikf +0.83 %/degC,
-   i_kf 21.97, r_diode 1.896 m. **PROMOTED to ST8L65_DIODE** (7-param free
-   set) despite the caveats: the five-knob r_diode/i_kf/a_ikf/a_rdiode/
-   b_rdiode block is strongly correlated (|corr| up to 0.985, sigma(i_kf)
-   5.9 -> 15.4) -- quote the CURVE, never the split. (identifiability prints
-   rank 6/7 -- a tolerance ARTIFACT: b_rdiode's column norm ~1.9e4 inflates
-   the relative dead-column cutoff; unit-column SVD is full rank 7/7,
-   smallest singular value 3.6e-2 of max. The round-trip test asserts
-   rank >= 6 with a comment.) Promotion bookkeeping: script MULTI_START now
-   carries b_rdiode starts (four starts, all 3.91 %, drift 3.8e-5 [OK]);
-   trs2_probe flipped to trs2_off_probe (b_rdiode pinned 0, reproduces the
-   session-14 4.15 % baseline); pinned-test bound 0.043 -> 0.040 (between
-   3.91 % record and 4.15 % baseline) + b_rdiode interior assertion.
-5. **Root cause of the 150 C residual (the real finding):** it is the 5 A
-   point (+13..15 %). Its digitized v_sd (0.562 V) sits ~12 mV ABOVE what any
-   smooth fit wants; at 5 A the r_diode drop is only ~10 mV of 562 mV, so NO
-   Rs TC (Trs1 or Trs2) can move it. Excluding that one point: 150 C rms
-   3.85 % (record) / 3.76 % (Trs2 fit). The 5 A point at 25 C is off the
-   OTHER way (-6 mV, -9 %): the leftmost digitized point of each curve is
-   the data's weak spot. The 150 C curve itself is smooth (dV/dlnI rises
-   monotonically 69 -> 256 mV/decade -- no digitization kink).
-6. **Recombination branch re-probed** (the physical candidate for
-   low-current/high-T bending): 3.50 % overall but sigma(i_sr) = 645
-   (unsensed), rank 7/9, 5 A/150 C point stays +11.7 % -- keep i_sr off.
+## LTspice 26.0.1 gotchas (measured, on the record in CAP_SPEC)
 
-## Queue (unchanged)
+- `table()` in a B source: rejected ("Function not supported in this
+  context").
+- `table()` inside `Q=`: compiles, but its **symbolic derivative is
+  garbage** (~1e11 A measured). Never use.
+- Absolute-slope ramp sums are WRONG (they sum segment slopes instead of
+  stepping them — showed up as exact n× parity factors). Use the
+  incremental form.
+- `.MODEL x C (C=...)` on the instance: "Unknown parameter".
+- Parity measurement: `.meas tran FIND` must land strictly INSIDE
+  staircase segments (on a knot you measure the solver's blend), and
+  maxstep must keep the Gear-2 companion's q-history window ≪ the
+  segment width (5 ns at 1e7 V/s ramps worked).
+- Sign convention verified: `Cxxx n1 n2 Q=q(x)` sinks dq/dt from n1;
+  driving the delta with Vxx gives I(Vxx) = −dq/dt.
 
-- **Third-quadrant channel**: `sign(v_ds)*i_d(|v_ds|, v_gs)` for
-  synchronous-rectifier support; channel stays clamped 0 for v_ds <= 0.
-- **HV leakage / BV/Ibv**: reverse floor is the Shockley i_s(T)+i_sr(T)
-  ~ 3.85 uA @ -1 V/25 C (datasheet ~1 uA @650 V) -- dedicated element still
-  needed; the removed (0 V, 650 V, 1 uA) IV point waits on it.
-- Q(V)/Qrr, `Tj` node (diode `t_c` is the placeholder interface), LTspice
-  `.subckt` export (diode part is LTspice-exact incl. all TCs:
-  `D(Is=… N=… Ikf=… Tikf=… Rs=… Trs1=… Trs2=… Tnom=… Xti=… Eg=…)`), CI.
-- Data priority: re-digitize (or measure) the 5 A points at 25/150 C --
-  they, not missing physics, set the diode RMSE floor (~3.1-3.2 % excl.
-  those points).
+## Queue (updated)
 
-## Notes / gotchas
+- **Full-device LTspice subckt** — channel B source (vdmos_id is all
+  expressible: softplus/tanh/min/max) + diode `D(...)` + r_d/r_s + this
+  caps subckt; then A/B switching sim vs Level-1. This is the natural
+  next session (Phase 5 of the validation plan: double-pulse Eon/Eoff
+  within ~10 %; turn-on time arbitrates the flat-branch finding).
+- **v_gs-dependent C_gd blend (channel charge, limitation 1)** — the
+  plateau deficits above are its quantified targets (SJ +61 % worst).
+  Needs the SiC DC IV fit first (IMCQ120 output curves NOT digitized —
+  the repo has only ST8L65 IV).
+- Clean the ST8L65 `iss` gridline-snap artifact (four identical
+  4869.28716 pF points) on the next re-digitization pass.
+- Unchanged from session 15: third-quadrant channel, HV leakage/BV,
+  Tj node, CI, diode 5 A re-digitization.
 
-- TC=0 gives factor exactly 1.0 in IEEE -> bit-identical; TCs never touch
-  the Xti/Eg saturation-current law (separate mechanism).
-- b_rdiode sigma_rel = 0.0003 in the 7-param record fit is NOT real
-  information (pinv along the near-degenerate correlated direction) -- the
-  whole TC/knee block must be quoted as a curve, never as individual splits.
-  identifiability's rank on mixed-unit linear-space
-  columns is tolerance-sensitive: b_rdiode's dT^2 scale (~1e4 column norm)
-  inflates the relative dead cutoff. Unit-column SVD is the honest check
-  (7/7 here). A future session could scale columns inside identifiability --
-  would change the channel fit's quoted rank 8/10, so do it deliberately.
-- i_kf "off" = sentinel 0.0, never the 1e-3 bound (active knee).
-- `.vscode/settings.json` still untracked (editor-local).
-- `out/` gitignored: st8l65_diode_{params,probe}.txt + fit pngs on disk as
-  evidence; the record lives in `vdmos_fit/reference.py`, drift-checked by
-  `scripts/fit_st8l65_diode.py` (OFFICIAL_TOL 1e-3).
+## Notes / gotchas (carry forward)
+
+- Tool name: `engineering__execute_python` (NOT files__execute_python).
+- `PchipInterpolator` in the installed scipy has no `derivatives=` kwarg —
+  directed endpoint slopes come from the quadratic splice, not PCHIP.
+- pF·V = pC, not C. The plateau split is at V_gp (v_gd = 0), not ΔV_gs.
+- ln vs log10 interpolation: identical (affine rescale).
 - Dev env: no venv in repo; pytest/ruff live in the assistant's
-  `engineering313` env (Python 3.13.5).
+  `engineering313` env (Python 3.13.5). openpyxl available.
+- Test totals drift: 8 digitizer window tests drive Tk and self-skip
+  headless (0–2 skipped per run) — don't pin the count.
+- `out/` gitignored: fit_cmax_params.txt, fit_cmax_cgd.png,
+  <part>_caps.subckt, parity_*.cir live there. `.vscode/` still untracked.
+- Scratch figures from sessions 16/17 in workspace `outputs/`
+  (cv_pchip_tables.png, cv_gd_splice_fixed.png, cv_splice_check.png).
