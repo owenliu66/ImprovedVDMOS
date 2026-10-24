@@ -1,6 +1,6 @@
 """Improved VDMOS channel current: one continuous expression, no triode/sat switch.
 
-    i_d = k_p*v_ov_eff*(v_dseff - v_dseff**2/(2*v_knee)) / (1 + v_dseff/v_vsat)
+    i_d = k_p*v_ov_eff2*(v_dseff - v_dseff**2/(2*v_knee)) / (1 + v_dseff/v_vsat)
             * (1 + k_lambda*v_ds*k_db)
           + g_k*v_ds*k_kink*k_db
 
@@ -9,12 +9,16 @@
     v_ov     = v_sub*ln(1 + exp((v_gs - v_th)/v_sub))  smooth subthreshold -> strong inversion
     v_ov_eff = v_ov/(1 + (v_ov/v_ovmax)**k_ovsharp)**(1/k_ovsharp)
                                                 soft charge cap (v_ovmax = 0 -> off)
-    v_knee   = v_ov_eff/(1 + k_theta*v_ov_eff)    knee voltage (field-dependent mobility)
+    v_ov_eff2 = v_ov_eff*(1 + k_beta_trap*v_ov_eff)
+                                                interface-trap-filling gain (k_beta_trap = 0 -> off)
+                                                THE effective overdrive downstream
+    v_knee   = v_ov_eff2/(1 + k_theta*v_ov_eff2)  knee voltage (field-dependent mobility)
     v_dseff  = v_knee*tanh(v_ds/v_knee)           soft drain variable (k_kneesharp = 0, legacy)
              = v_ds/(1 + (v_ds/v_knee)**k_kneesharp)**(1/k_kneesharp)   power-law soft-min
 
 Naming: <type prefix>_<suffix> with k_ for dimensionless factors and Greek letters
-(k_lambda / k_eta / k_theta keep their industry-standard symbols; k_p is A/V^2).
+(k_lambda / k_eta / k_theta keep their industry-standard symbols; k_p is A/V^2;
+the 1/V set is k_lambda / k_eta / k_theta / k_beta_trap).
 `db` = drain **bias** (not drain-to-body: this model has no bulk terminal).
 Convention table and unit rules: README.md, "Naming convention".
 
@@ -79,6 +83,8 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarra
     ndarray | float
         i_d [A], same broadcast shape as (v_ds, v_gs).
     """
+    _require_nonneg_gain(p)
+
     v_ds = np.asarray(v_ds, dtype=float)
     v_gs = np.asarray(v_gs, dtype=float)
     v_ds, v_gs = np.broadcast_arrays(v_ds, v_gs)
@@ -114,8 +120,34 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarra
     return i_ch - i_di
 
 
+def _require_nonneg_gain(p: Params) -> None:
+    """Reject k_beta_trap < 0 outright -- the guard pinned by HANDOVER 1.4(4).
+
+    v(1 + k*v) is non-monotone for k < 0: dv_ov_eff2/dv_ov_eff = 1 + 2*k*v hits
+    zero at v_ov_eff = -1/(2k) and goes negative beyond it, making f non-
+    monotone in v_gs, i_d multi-valued, and the package-R bracket proof
+    (dg/di_d <= -1) dead. Physics says the constraint is free anyway:
+    interface-trap filling only *raises* channel mobility, so k_beta_trap >= 0
+    (measured scale ~0.06 1/V on 4H-SiC). The clamp alternative (flooring
+    1 + 2*k*v at a tiny value, diode.py TC-clamp precedent) would silently
+    evaluate the non-monotone branch -- rejected. BOUNDS lower bound is also
+    exactly 0.0, so a free k_beta_trap can never go negative during a fit;
+    this guard covers direct Params construction.
+    """
+    if p.k_beta_trap < 0.0:
+        raise ValueError(
+            f"k_beta_trap must be >= 0 (got {p.k_beta_trap}): the gain "
+            "v_ov_eff2 = v*(1 + k_beta_trap*v) is non-monotone for negative "
+            "k_beta_trap (derivative 1 + 2*k_beta_trap*v crosses zero), which "
+            "breaks the package-R bracket proof and makes i_d multi-valued in "
+            "v_gs. Physics: interface-trap filling only raises channel mobility."
+        )
+
+
 def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:
     """Intrinsic channel current at the *internal* node voltages (no package R)."""
+    _require_nonneg_gain(p)
+
     # Common drain-bias factor: 0 in the ohmic region, ~1 well above the knee.
     k_db = np.tanh(v_ds / p.v_dbsat)
 
@@ -129,9 +161,17 @@ def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:
     # 2b) Soft charge cap (v_ovmax = 0 is the identity; see README).
     v_ov_eff = _soft_cap(v_ov, p.v_ovmax, p.k_ovsharp)
 
+    # 2c) Interface-trap-filling gain (k_beta_trap = 0 is the exact identity;
+    # see README, "Interface-trap-filling gain (k_beta_trap)"). v_ov_eff2 is
+    # THE effective overdrive for everything downstream. Composition decision
+    # (HANDOVER 1.1): k_theta multiplies v_ov_eff2, NOT v_ov_eff -- v_knee is
+    # the pinch-off/pinball knee set by the FINAL channel charge, the same
+    # argument the cap section makes for applying the cap before v_knee.
+    v_ov_eff2 = v_ov_eff * (1.0 + p.k_beta_trap * v_ov_eff)
+
     # 3) Knee voltage from vertical-field mobility degradation, built from the
-    # CAPPED overdrive (charge and knee saturate together; see README).
-    v_knee = np.maximum(v_ov_eff / (1.0 + p.k_theta * v_ov_eff), p.v_kneemin)
+    # gained overdrive (charge and knee saturate together; see README).
+    v_knee = np.maximum(v_ov_eff2 / (1.0 + p.k_theta * v_ov_eff2), p.v_kneemin)
 
     # 4) Soft drain variable: v_dseff -> v_ds for v_ds << v_knee, -> v_knee for
     #    v_ds >> v_knee. k_kneesharp = 0 (default) keeps the legacy tanh
@@ -149,7 +189,7 @@ def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:
         v_dseff = np.sign(v_ds) * _soft_min(np.abs(v_ds), v_knee, p.k_kneesharp)
 
     # 5) Unified channel charge term (triode + saturation in one C^1 expression).
-    i_ch = p.k_p * v_ov_eff * (v_dseff - 0.5 * v_dseff * v_dseff / v_knee)
+    i_ch = p.k_p * v_ov_eff2 * (v_dseff - 0.5 * v_dseff * v_dseff / v_knee)
 
     # 6) Velocity saturation + gated output conductance.
     i_ch /= 1.0 + v_dseff / p.v_vsat
@@ -173,9 +213,13 @@ def _soft_min(x, k, n):
     Log-space (logaddexp) so x**n cannot overflow (n ~ 10-40 is a fitted
     regime). Requires x >= 0, k > 0, n > 0. Properties (shared by the charge
     cap and the drain soft-switch): identity for x << k, asymptote k for
-    x >> k, derivative (1 + (x/k)**n)**(-1/n - 1) so 0 <= df/dx <= 1 --
-    which is what keeps the package-R solver bracket invariant
-    dg/di_d <= -1 intact. """
+    x >> k, derivative (1 + (x/k)**n)**(-1/n - 1) so 0 <= df/dx <= 1. The
+    package-R solver bracket proof needs the MONOTONICITY half (df/dx >= 0),
+    not the <= 1 bound itself: dg/di_d = -(r_d+r_s)*df/dv_ds - r_s*df/dv_gs - 1
+    <= -1 whenever the partials are >= 0. The trap-filling gain breaks the
+    <= 1 half (dv_ov_eff2/dv_ov_eff = 1 + 2*k_beta_trap*v_ov_eff > 1) but not
+    the monotonicity, so the bracket survives (tested with r_s > 0 in
+    tests/test_overdrive_gain.py). """
     with np.errstate(divide="ignore", invalid="ignore"):
         t = n * (np.log(np.maximum(x, 1e-300)) - np.log(k))
     return x * np.exp(-np.logaddexp(0.0, t) / n)
@@ -186,8 +230,12 @@ def _soft_cap(v_ov, v_ovmax: float, k_ovsharp: float):
 
     Log-space form prevents overflow of (v_ov/v_ovmax)**k_ovsharp (k_ovsharp ~
     10-40 is a fitted regime). v_ovmax <= 0 returns v_ov unchanged -- the exact
-    pre-cap model, bit for bit. Properties and why 0 <= dv_ov_eff/dv_ov <= 1
-    matters: README, "Charge-cap numerics".
+    pre-cap model, bit for bit. 0 <= dv_ov_eff/dv_ov <= 1 (README, "Charge-cap
+    numerics"): the monotonicity is what the package-R bracket proof requires;
+    the <= 1 bound is a cap-only bonus -- the interface-trap-filling gain
+    applied AFTER the cap lifts the composite asymptote to
+    v_ovmax*(1 + k_beta_trap*v_ovmax) and can push the composite gate
+    derivative past 1 while keeping it positive.
     """
     if v_ovmax <= 0.0:
         return v_ov

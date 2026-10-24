@@ -1,6 +1,25 @@
 # Handover — ImprovedVDMOS session 18: IMCQ120R004M2H two-temperature IV fits DONE
 ## NEXT SESSION = implement the interface-trap-filling gain `v_ov_eff2` / `k_beta`
 
+> **SESSION 19 UPDATE (2026-10-23): PART 1 IS DONE.** `v_ov_eff2`/`k_beta_trap`
+> landed in `model.py`/`params.py` with 10 tests (`tests/test_overdrive_gain.py`,
+> suite 154 green, ruff clean) and the README/STATUS sections. Two user-directed
+> changes vs this document: **(1) the parameter is named `k_beta_trap`** (the
+> names.xlsx `beta_trap` row already exists — no row was added; `k_beta` never
+> enters the package), and **(2) `BOUNDS["k_beta_trap"] = (0.0, 2.0)` with the
+> lower bound exactly 0.0** (not the 1e-3 floor proposed in 1.3) plus a hard
+> ValueError guard for negative values in `model.py` (decision 1.4(4) pinned:
+> bound + reject, clamp rejected). The 1.7 anchors were reproduced with the real
+> model (RMSE 4.61/3.30 %, k_beta_trap 0.0570→0.0758 1/V, Ron chords and Vth
+> spec match; scratch `tooling/workspace/outputs/verify_gain_anchors.py`).
+> ST8L65 official record re-fit reproduces the record bit-for-bit with
+> k_beta_trap out of the free set (drift 1.8e-06 [OK], scipy 1.18.1); a
+> scipy-1.16.0 re-run lands elsewhere in the flat σ=inf k_lambda/v_dbsat
+> valley and trips the script's naive drift metric — A/B-verified as an
+> environment artifact, not the model edit (STATUS session-19 section). Details:
+> STATUS.md "Interface-trap-filling gain (session 19)". The
+> PART 3 queue below stands; item 1 is CLOSED.
+
 Session 17 (caps/charge model, LTspice export + parity) is COMPLETE and committed;
 its durable findings live in `STATUS.md` + `CAP_SPEC.md` + `reference.py` (the
 LTspice 26.0.1 cap gotchas are recorded there — do not re-derive them).
@@ -248,7 +267,8 @@ fit** before quoting anything above ~1500 A.
 
 # PART 3 — Queue (updated)
 
-1. **Implement `v_ov_eff2`/`k_beta`** — PART 1. Highest priority.
+1. **Implement `v_ov_eff2`/`k_beta`** — PART 1. Highest priority. **CLOSED
+   session 19** (as `k_beta_trap`, bounds ≥ 0 — see the banner above).
 2. **Digitize the IMCQ transfer characteristic** (V_DS = 20 V, 25/175/200 °C,
    datasheet p. 9) → **joint multi-temperature fit** (both IV sets + Rds(on)-T_j
    + V_th-T_j + transfer, with the TC laws as the only extra unknowns). Fixes
@@ -264,7 +284,7 @@ fit** before quoting anything above ~1500 A.
 5. **Kelvin-aware subckt:** `r_s` inside the current path but OUTSIDE the gate
    loop. Today `r_s = 0` leaves the source-side power path unmodeled, so its T
    dependence aliases into `r_d` (hence γ = 3.3 ≫ package-only). Expected source
-   of the "fit looks a bit weird" caveat the user flagged.
+   of the "unphysical r_d and r_s" caveat the user flagged.
 6. **CSV header contract mismatch (small, do it early):** the IMCQ digitizer
    export uses `index,V_ds,I_d,V_gs`, which **breaks `load_csv()`** (contract is
    `vgs,vds,ids`). Both scripts carry a local `load_imcq()`. Decide: rename the

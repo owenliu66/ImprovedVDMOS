@@ -27,8 +27,9 @@ class Params:
     prefixes v_ voltage, i_ current, r_ resistance, g_ conductance, k_ factor.
     Greek letters take the k_ prefix so no name collides with a Python keyword
     (k_lambda for lambda); the k_ factors are unitless EXCEPT the industry-
-    standard set k_p [A/V^2], k_lambda, k_eta, k_theta [1/V]. ``db`` means drain
-    **bias**, not drain-to-body -- this model has no bulk terminal.
+    standard set k_p [A/V^2] and the 1/V set k_lambda, k_eta, k_theta,
+    k_beta_trap [1/V]. ``db`` means drain **bias**, not drain-to-body -- this
+    model has no bulk terminal.
 
     Physical rationale for the charge cap (v_ovmax, k_ovsharp) and the package
     resistances (r_d, r_s) is in the project README.md ("Gate-overdrive charge
@@ -49,8 +50,30 @@ class Params:
                    of off).
     k_ovsharp : float  Sharpness of the overdrive cap [-]; >> 1 approaches a
                    hard clip at v_ovmax. Only meaningful when v_ovmax > 0.
+    k_beta_trap : float  Interface-trap-filling gain on the effective gate
+                   overdrive [1/V] (WBG devices; names.xlsx "beta_trap"):
+                   v_ov_eff2 = v_ov_eff*(1 + k_beta_trap*v_ov_eff). Models
+                   4H-SiC channel-mobility recovery as the surface potential
+                   deepens and interface traps fill -- the counterpart (same
+                   knob family, OPPOSITE sign) of the super-junction charge
+                   cap. v_ov_eff2 is THE effective overdrive downstream
+                   (v_knee and the i_d prefactor both use it; k_theta
+                   multiplies v_ov_eff2, not v_ov_eff). 0 = off, exact
+                   identity -- "off" is reached by leaving it out of the free
+                   set. MUST be >= 0: negative values make v(1 + k*v) non-
+                   monotone (derivative 1 + 2*k*v crosses zero), breaking the
+                   package-R bracket proof; model.py raises ValueError for
+                   k_beta_trap < 0 (physics: trap filling only raises
+                   mobility). Linear space (0 is legitimate, never logged);
+                   BOUNDS lower bound is exactly 0.0 (user decision) -- safe
+                   here because the gain is continuous in k_beta_trap and
+                   EXACTLY the identity at 0 (r_d/r_s precedent, unlike the
+                   k_kneesharp floor argument). Composition gotcha with the
+                   cap active: the v_ov_eff2 asymptote is
+                   v_ovmax*(1 + k_beta_trap*v_ovmax), NOT v_ovmax -- expect
+                   k_beta_trap <-> v_ovmax anti-correlation if both are free.
     k_theta : float  Mobility-degradation coefficient [1/V] ->
-                   v_knee = v_ov_eff/(1 + k_theta*v_ov_eff).
+                   v_knee = v_ov_eff2/(1 + k_theta*v_ov_eff2).
     v_vsat : float   Velocity-saturation knee [V]; sets i_d,sat ~ v_ov**alpha,
                    alpha < 2. (The doubled v_ is deliberate: v_sat alone would
                    read as the drain-saturation voltage, which is v_knee.)
@@ -137,6 +160,7 @@ class Params:
     v_sub: float = 0.05
     v_ovmax: float = 0.0
     k_ovsharp: float = 1.0
+    k_beta_trap: float = 0.0
     k_theta: float = 0.015
     v_vsat: float = 1.5
     k_kneesharp: float = 0.0
@@ -176,7 +200,9 @@ PARAM_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Params))
 
 # Parameters fitted in log space (strictly positive, span decades).
 # v_ovmax is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
-# k_kneesharp likewise: 0 is the legitimate "legacy tanh" value.
+# k_kneesharp likewise: 0 is the legitimate "legacy tanh" value. k_beta_trap
+# likewise: 0 is the legitimate "gain off" identity (and negative values are
+# rejected outright by model.py, so the parameter is not strictly positive).
 # Diode saturation currents are in LOG_PARAMS even though 0 is the off
 # sentinel: "off" is reached by leaving them out of the free set (same
 # doctrine as v_ovmax/k_kneesharp), and a FREE i_s must never wander near 0
@@ -200,6 +226,14 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # never enter the "hard clip at ~0 V" region).
     "v_ovmax": (0.05, 100.0),
     "k_ovsharp": (0.5, 40.0),
+    # Linear space; lower bound EXACTLY 0.0 (user decision: k_beta_trap >= 0).
+    # No sentinel-mimicry hazard unlike the k_kneesharp floor argument: the
+    # gain is continuous in k_beta_trap and exactly the identity at 0 (same
+    # precedent as r_d/r_s), and model.py rejects k_beta_trap < 0 outright
+    # (non-monotone v(1 + k*v) kills the package-R bracket proof). Upper
+    # bound 2.0 is a search guard -- the measured physical scale is ~0.06 1/V
+    # (IMCQ120R004M2H, 25/175 degC).
+    "k_beta_trap": (0.0, 2.0),
     "k_theta": (1e-4, 5.0),
     "v_vsat": (0.05, 10000.0),
     # Linear space; lower bound above 0 for the same reason as v_ovmax -- a
@@ -252,7 +286,9 @@ BOUNDS: dict[str, tuple[float, float]] = {
 # Sensible starting free set: everything that shapes the static I-V curves.
 # v_ovmax/k_ovsharp are deliberately absent -- freeing them would silently
 # change every existing fit and anchor (see README, "Bounds and fitting-space
-# decisions").
+# decisions"). k_beta_trap likewise: default 0.0 is the identity, freeing it
+# silently changes existing fits (and on silicon SJ parts it anti-correlates
+# with v_ovmax -- README, "Interface-trap-filling gain").
 DEFAULT_FREE: tuple[str, ...] = (
     "k_p",
     "v_th0",

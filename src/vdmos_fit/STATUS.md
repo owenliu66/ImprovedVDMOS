@@ -1,14 +1,20 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-21 (session 17 — capacitance/charge model LANDED: `caps.py`
-charge-master LUTs + c_gd splice, `extract_cmax()` on digitized Qg curves,
-`CAP_*` records, `ltspice.py` nonlinear-cap export with live LTspice parity;
-session 16 settled the design and digitized the data — see CAP_SPEC.md).
+*Snapshot: 2026-10-23 (session 19 — interface-trap-filling gain
+`v_ov_eff2`/`k_beta_trap` LANDED in the channel model, off by default;
+session 18 investigated the IMCQ120R004M2H two-temperature IV fits and the
+gain probe — committed as `3385ee2`, findings in
+`out/IMCQ120_TEMPERATURE_REPORT.md` + HANDOVER.md; session 17 landed the
+capacitance/charge model — see CAP_SPEC.md).
 Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Seventeen sessions, all committed to `main` (session 11 renamed every parameter
+Nineteen sessions, committed to `main` (session 18 added the IMCQ120R004M2H
+SiC IV data + two-temperature fits + the gain probe (`3385ee2`); session 19
+landed the interface-trap-filling gain `v_ov_eff2`/`k_beta_trap` in the channel
+model — uncommitted at snapshot time, see the session-19 section below;
+session 11 renamed every parameter
 to the `<type prefix>_<suffix>` convention — names.xlsx + README "Naming
 convention" are the mapping, tag `pre-rename-2026-10` is the escape hatch, and
 the rename is bit-identical; session 12 added the **body diode** —
@@ -37,7 +43,8 @@ and the Miller-plateau deficit quantifies limitation 1) plus the
 Q= ramp-sum of sampled q(v); live parity ≤0.3 % on all three parts).
 The package provides one C¹ continuous
 drain-current model — softplus subthreshold, gate-overdrive charge cap (v_ovmax, k_ovsharp),
-mobility degradation via v_knee, velocity saturation, bounded DIBL, gated CLM,
+interface-trap-filling gain (k_beta_trap) on v_ov_eff2, mobility degradation via v_knee,
+velocity saturation, bounded DIBL, gated CLM,
 one-sided trench kink — embedded with package series resistance r_d/r_s (implicit
 external-node solve with a Newton stall guard, LTspice Rd/Rs semantics,
 channel v_ds ≥ 0 only; reverse polarity is carried by the body diode), plus bounded least-squares extraction with identifiability
@@ -55,7 +62,7 @@ and `on_bounds` flags pinned parameters relative to the bound's magnitude, not
 the search-box width. Current OFFICIAL fits on
 ST8L65N044M9: channel **3.79 % relative RMSE (fit A, 10-param with `k_kneesharp` free, full
 41-point set, rank 8/10, cond 2.19e3)**; diode **4.78 % on 30 points
-(−55/25/150 °C), rank 4/4, cond 6.1e3, v_eg = 1.097 eV**. 145 tests green,
+(−55/25/150 °C), rank 4/4, cond 6.1e3, v_eg = 1.097 eV**. 154 tests green,
 ruff clean. Datasheet Figure 3 (typical output curves), the body-diode
 forward characteristics CSV, and the three-part C–V + Qg CSVs are on disk
 in `data/`.
@@ -447,6 +454,78 @@ one basin); pinned-test bound 0.043 → **0.040** (between the 3.91 % record
 and the 4.15 % linear-TC baseline); `trs2_off_probe` (b_rdiode pinned 0)
 reproduces the session-14 4.15 % protocol as the standing baseline, next to
 `tc_off_probe` (4.78 %, session 12).
+
+## Interface-trap-filling gain `k_beta_trap` (session 19) — LANDED, off by default
+
+The session-18 mechanism is now in the package model:
+
+    v_ov_eff2 = v_ov_eff·(1 + k_beta_trap·v_ov_eff)     k_beta_trap [1/V], 0 = identity
+
+`v_ov_eff2` is THE effective overdrive downstream: `v_knee =
+max(v_ov_eff2/(1 + k_theta·v_ov_eff2), v_kneemin)` and the i_d prefactor both
+switch to it. Naming per names.xlsx (source of truth): `k_beta_trap` (type
+factor, suffix `beta_trap`) and `v_ov_eff2` — the user renamed the session-18
+probe's `k_beta` to `k_beta_trap` before implementation.
+
+Decisions pinned (README, "Interface-trap-filling gain"):
+
+- **k_theta multiplies v_ov_eff2, not v_ov_eff** — v_knee is set by the final
+  channel charge (same argument the cap section makes).
+- **k_beta_trap >= 0 is a hard constraint (user-directed):**
+  `BOUNDS["k_beta_trap"] = (0.0, 2.0)` with the lower bound EXACTLY 0.0, and
+  `model.py::_require_nonneg_gain` raises ValueError for negative values at
+  both `vdmos_id` and `_channel_current`. The clamp alternative (diode.py
+  TC-clamp precedent) was rejected — it would silently evaluate the
+  non-monotone branch. Rationale: v(1 + k·v) with k < 0 has derivative
+  1 + 2·k·v crossing zero → i_d multi-valued in v_gs, bracket proof dead;
+  physics (trap filling only raises mobility) makes the constraint free.
+- Linear space (0 legitimate, never logged), NOT in DEFAULT_FREE, default 0.0
+  = exact identity → every pre-gain anchor bit-identical
+  (`tests/test_overdrive_gain.py::test_k_beta_trap_zero_bit_identical`; the
+  official ST8L65 record keeps k_beta_trap out of the free set and
+  `test_st8l65_official.py` stays green).
+- **Bracket-invariant amendment (the docstring claim was imprecise):** the
+  package-R proof needs the partials NON-NEGATIVE (monotonicity), not ≤ 1.
+  The gain lifts dv_ov_eff2/dv_ov_eff = 1 + 2·k_beta_trap·v_ov_eff to 2.36
+  (25 °C) / 3.00 (175 °C) at v_gs = 18 — breaks the ≤ 1 half, keeps
+  monotonicity. The r_s > 0 case (untested per HANDOVER 1.4 — silicon fits
+  live there) is now tested: dense-grid convergence + brentq parity + the
+  SJ-cap set + gain through the gate-degeneration stall band
+  (`test_package_r_bracket_with_gain_cap_off`,
+  `test_package_r_stall_guard_with_cap_and_gain`).
+- **Composition gotcha pinned:** with the cap active the composite asymptote
+  is v_ovmax·(1 + k_beta_trap·v_ovmax), NOT v_ovmax
+  (`test_gain_raises_cap_ceiling`); synthetic cap+gain round trip gives
+  corr(k_beta_trap, v_ovmax) = −0.85 — freeing both on silicon SJ parts
+  requires re-quoting the record (never mix records).
+
+**Anchor verification (session 18 HANDOVER 1.7 table):** the probe protocol
+re-run with the REAL package model (scratch
+`tooling/workspace/outputs/verify_gain_anchors.py`; cap off, k_lambda = 0,
+r_s = 0, 8 free incl. k_beta_trap, 4 seeds, r_d capped at datasheet Rds(on)):
+RMSE 4.61 / 3.30 % (25/175 °C), k_beta_trap 0.05700 → 0.07584 1/V, k_p 25.74,
+v_th0 6.060, v_sub 0.7644, r_d 1.731 → 7.032 mΩ, Ron chords 3.701/4.729 mΩ
+(25 °C), Vth spec 57.3/58.2 mA, gain derivative 2.36/3.01 — all match the
+standalone-probe anchors to solver tolerance. Note: at 175 °C the DIBL pair
+(k_eta, v_dbsat) is unsensed (σ = inf; k_eta pins at the 1e-5 floor, v_dbsat
+at the 1300 ceiling — the package BOUNDS are wider than the probe's 0.05/10
+caps); the anchors above are unaffected. The high-v_gs transfer overshoot
+(model 3650 A vs datasheet figure ~2300 A at v_gs = 18, V_DS = 20 V) is
+UNCHANGED by the implementation — fixing it needs the transfer-curve
+digitization + joint k_lambda refit (HANDOVER Part 3 queue item 2).
+
+10 new tests in `tests/test_overdrive_gain.py`; suite green (154–155 passed
+depending on how many digitizer Tk tests self-skip headless — don't pin
+counts). ST8L65 record re-run (`scripts/fit_st8l65_nd.py`): fit A reproduces
+the record **bit-for-bit** (drift 1.8e-06 [OK]) under the session interpreter
+(scipy 1.18.1). The first re-run (system Python, scipy 1.16.0) landed at a
+different point of the flat σ=inf `k_lambda`/`v_dbsat` valley (v_dbsat 1287.03
+vs 339.02, k_lambda 1.63e-9 vs 5.13e-10) and the script's naive
+max-relative-drift metric flagged STALE 2.80 — A/B-verified as a pure
+scipy-version solver-trajectory artifact (`tooling/workspace/outputs/
+_s19_drift_ab*.log`): identical code lands at 339.02 under 1.18.1 and at
+1287.03 under 1.16.0, every SENSED parameter identical to ~1e-5 relative
+either way. Quote the curve, never the valley point.
 
 ## Open problems
 

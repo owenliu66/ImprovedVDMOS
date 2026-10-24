@@ -41,19 +41,21 @@ never change i_d,sat = ½·Kp·Vov². Consequences:
 | Off-state slope | undefined | softplus subthreshold floor, gate-dependent |
 | Trench kink | none | one-sided sigmoid |
 | Gate-charge saturation (α collapse at high v_gs) | none | soft cap `v_ovmax`, `k_ovsharp` (off by default) |
+| Interface-trap-filling gain (α rise at high v_gs, WBG) | none | gain `k_beta_trap` on `v_ov_eff2` (off by default) |
 | Knee width vs knee position | locked (mtriode moves both) | independent shape knob `k_kneesharp` (off by default) |
 
 ## Model
 
 ```
-i_d  = k_p·v_ov_eff·(v_dseff − v_dseff²/(2·v_knee))/(1 + v_dseff/v_vsat)·(1 + k_lambda·v_ds·k_db)
+i_d  = k_p·v_ov_eff2·(v_dseff − v_dseff²/(2·v_knee))/(1 + v_dseff/v_vsat)·(1 + k_lambda·v_ds·k_db)
        + g_k·v_ds·k_kink·k_db
 
 k_db     = tanh(v_ds/v_dbsat)                            drain bias: 0 ohmic, ~1 above knee
 v_th     = v_th0 − k_eta·v_ds·k_db                       DIBL, bounded
 v_ov     = v_sub·ln(1 + exp((v_gs − v_th)/v_sub))        smooth subthreshold → strong inversion
 v_ov_eff = v_ov/(1 + (v_ov/v_ovmax)^k_ovsharp)^(1/k_ovsharp)   soft charge cap (v_ovmax = 0 → off)
-v_knee   = max(v_ov_eff/(1 + k_theta·v_ov_eff), v_kneemin)  vertical-field mobility degradation
+v_ov_eff2 = v_ov_eff·(1 + k_beta_trap·v_ov_eff)  interface-trap-filling gain (k_beta_trap = 0 → off)
+v_knee   = max(v_ov_eff2/(1 + k_theta·v_ov_eff2), v_kneemin)  vertical-field mobility degradation
 v_dseff  = v_knee·tanh(v_ds/v_knee)   or   softmin(v_ds, v_knee, k_kneesharp)
 k_kink   = 0.5·(1 + tanh((v_gs − v_thk)/v_kovsoft))      one-sided trench-kink gate
 ```
@@ -70,18 +72,19 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth: `names.xlsx`)
 
 | prefix | type | examples |
 |---|---|---|
-| `v_` | voltage [V] | `v_th0`, `v_th`, `v_ov`, `v_ov_eff`, `v_ovmax`, `v_sub`, `v_knee`, `v_kneemin`, `v_dseff`, `v_vsat`, `v_dbsat`, `v_thk`, `v_kovsoft` |
+| `v_` | voltage [V] | `v_th0`, `v_th`, `v_ov`, `v_ov_eff`, `v_ov_eff2`, `v_ovmax`, `v_sub`, `v_knee`, `v_kneemin`, `v_dseff`, `v_vsat`, `v_dbsat`, `v_thk`, `v_kovsoft` |
 | `i_` | current [A] | `i_d` |
 | `r_` | resistance [Ω] | `r_d`, `r_s` |
 | `g_` | conductance [S] | `g_k` — trench-kink conductance, *not* transconductance |
-| `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_agd` |
+| `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_beta_trap`, `k_agd` |
 | `c_` | capacitance [F] | `c_gd`, `c_gs`, `c_ds`, `c_gd0`, `c_gdmax` (CAP_SPEC) |
 | `q_` | charge [C] | `q_gd`, `q_gs`, `q_ds` — the charge-master state variables |
 
 - Greek-letter parameters take the `k_` prefix so no name collides with a
   Python keyword: θ → `k_theta`, η → `k_eta`, λ → `k_lambda` (bare `lambda` is
   a keyword). The `k_` factors are unitless EXCEPT the industry-standard set:
-  `k_p` [A/V²] and the 1/V trio `k_lambda`, `k_eta`, `k_theta`.
+  `k_p` [A/V²] and the 1/V quartet `k_lambda`, `k_eta`, `k_theta`,
+  `k_beta_trap`.
 - `db` = drain **bias**, not drain-to-body — this model has no bulk terminal.
   `k_db = tanh(v_ds/v_dbsat)` is the drain-bias factor that gates DIBL, CLM and
   the kink term (0 in the ohmic region, ~1 above the knee).
@@ -111,9 +114,11 @@ its ceiling.
 The cap implements that as a soft power-law saturation of v_ov (equation
 above): identity for v_ov ≪ v_ovmax (subthreshold and the Ron limit untouched),
 asymptote v_ovmax for v_ov ≫ v_ovmax, and **0 ≤ dv_ov_eff/dv_ov ≤ 1 everywhere** —
-which is what keeps the package-R solver's bracket invariant dg/di_d ≤ −1
-intact. `k_ovsharp` sets the sharpness; the measured collapse is abrupt, so
-k_ovsharp ≈ 10 rather than the k_ovsharp = 1 of a tanh. The cap is applied **before v_knee** 
+the monotonicity half of that bound is what keeps the package-R solver's
+bracket invariant dg/di_d ≤ −1 intact (the trap-filling gain below breaks the
+≤ 1 half but not the monotonicity). `k_ovsharp` sets the sharpness; the
+measured collapse is abrupt, so k_ovsharp ≈ 10 rather than the k_ovsharp = 1 of
+a tanh. The cap is applied **before v_knee** 
 with a depleted pillar the pinch-off voltage is set by the
 depleted column, not by the surface charge. `v_ovmax = 0` (default) is the exact
 identity, so every pre-cap anchor stays bit-identical — pinned by
@@ -123,6 +128,65 @@ The previous mechanism, `kappa` (a drain-bias-dependent series resistance), was
 removed: `kappa` is a *voltage divider*, not a charge limit, and the cap beat it
 on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and ~1000× better
 conditioning.
+
+### Interface-trap-filling gain (k_beta_trap)
+
+On a 4H-SiC part the diagnostic points the **opposite** way: reading the
+near-origin ohmic point of each 25 °C output curve of the IMCQ120R004M2H
+(subtract the r_d·i_d drop, divide by k_p) gives an implied channel overdrive
+whose slope dv_ov/dv_gs **rises past 1** (0.48 at v_gs = 7 up to 1.29 at
+v_gs = 15). That is impossible for the pre-gain model: the softplus slope
+saturates at 1 and the cap only reduces. The physical picture: 4H-SiC channel
+mobility rises as the surface potential deepens and interface traps fill, so
+the conductance grows faster than (v_gs − V_th) — the WBG counterpart of the
+super-junction charge cap, same knob family, **opposite sign**.
+
+The gain implements that as
+`v_ov_eff2 = v_ov_eff·(1 + k_beta_trap·v_ov_eff)` (equation above, k_beta_trap
+[1/V]) and v_ov_eff2 becomes **the** effective overdrive for everything
+downstream: `v_knee = max(v_ov_eff2/(1 + k_theta·v_ov_eff2), v_kneemin)` and
+the i_d prefactor both use it. Composition decision: `k_theta` multiplies
+`v_ov_eff2`, not `v_ov_eff` — v_knee is the pinch-off/pinball knee set by the
+*final* channel charge, the same argument the cap section makes for applying
+the cap before v_knee.
+
+Session-18 probe anchors (cap off, k_lambda = 0, r_s = 0, 8-param protocol,
+reproduced bit-for-tolerance by the package model in session 19): RMSE
+8.53 → **4.61 %** (25 °C) and 6.13 → **3.31 %** (175 °C); k_beta_trap =
+0.0569 → 0.0757 1/V (+33 %, a real TC); Ron chord Vgs=18/15 3.701/4.729 mΩ
+(data 3.70/4.70); worst 25 °C curve v_gs = 8: 13.6 → 9.3 %.
+
+**Monotonicity and the package-R bracket.** The gain lifts
+`dv_ov_eff2/dv_ov_eff = 1 + 2·k_beta_trap·v_ov_eff` above 1 (measured 2.36 at
+25 °C, 3.00 at 175 °C, v_gs = 18) — it breaks the cap's `≤ 1` derivative bound
+but not monotonicity, and the bracket proof only needs monotonicity:
+`dg/di_d = −(r_d+r_s)·∂f/∂v_ds − r_s·∂f/∂v_gs − 1 ≤ −1` whenever the partials
+are ≥ 0. The steeper gate dependence inflates the bracket upper bound and
+makes Newton overshoot more, so the stall guard fires more often — tested
+with **r_s > 0 and the gain active** (`tests/test_overdrive_gain.py::test_package_r_bracket_with_gain_cap_off`
+and `..._stall_guard_with_cap_and_gain`).
+
+**k_beta_trap ≥ 0 is a hard constraint, not a fitted preference.** Negative
+k_beta_trap makes v(1 + k·v) non-monotone (derivative 1 + 2·k·v crosses zero
+at v = −1/(2k)), i_d multi-valued in v_gs, and kills the bracket proof.
+Decision (session 19, user-directed): bound it — `BOUNDS["k_beta_trap"] =
+(0.0, 2.0)` with the lower bound **exactly 0.0**, and `model.py` raises
+ValueError for k_beta_trap < 0 (the clamp alternative would silently evaluate
+the non-monotone branch — rejected). Physics says the constraint is free
+anyway: trap filling only *raises* mobility. Linear space (0 is legitimate,
+never logged); the 0 lower bound is safe here because the gain is continuous
+in k_beta_trap and **exactly the identity at 0** (r_d/r_s precedent, unlike
+the k_kneesharp floor argument). "Off" is still reached by leaving it out of
+the free set — it is NOT in DEFAULT_FREE.
+
+**Composition gotcha with the cap active (silicon SJ fits):** the asymptote of
+the composite is `v_ovmax·(1 + k_beta_trap·v_ovmax)`, **not** v_ovmax. On
+ST8L65 (v_ovmax ≈ 1.9, k_ovsharp ≈ 10) a freed k_beta_trap ≈ 0.06 lifts the
+plateau ~11 %, so k_beta_trap ↔ v_ovmax anti-correlate (synthetic round trip:
+corr ≈ −0.85) and v_ovmax drops to compensate. The official ST8L65 record
+(3.79 %, `reference.py`) keeps k_beta_trap **out of the free set** and stays
+bit-identical; if it is ever freed on a silicon part, re-quote the record and
+report the correlation — never mix records.
 
 ### Drain-knee softness (k_kneesharp)
 
@@ -284,7 +348,8 @@ pending list; session 14 added the diode temperature coefficients
 `a_ikf`/`a_rdiode` and `b_rdiode` (Trs2), and promoted the TC+Trs2 fit to the
 official record). The
 package provides one C¹ continuous
-drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp, mobility
+drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp,
+interface-trap-filling gain k_beta_trap, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
 package r_d/r_s, **plus the body diode** (LTspice diode DC branch with
 high-injection compression and the Xti/Eg temperature law, terminal-wired,
@@ -300,7 +365,7 @@ floor (plus the diode's reverse saturation when the diode is on). Current
 cond 2.19e3**; diode **3.91 % on 30 points (−55/25/150 °C), v_eg =
 1.082 eV ≈ silicon bandgap, TCs a_ikf = +0.83 %/°C / a_rdiode = +0.48 %/°C /
 b_rdiode = −1.78e-5/°C²**,
-145 tests green (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
+154 tests green (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
 not a fit failure. The Q(V) charge model **landed** (charge-master LUTs +
 c_gd splice + c_gdmax extraction from Qg + LTspice nonlinear-cap export with
@@ -342,7 +407,7 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 145 tests green (digitizer Tk window tests self-skip headless)
+pytest                            # 154 tests green (digitizer Tk window tests self-skip headless)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
@@ -389,9 +454,10 @@ Design rationale consolidated out of the `src/vdmos_fit` code comments.
 
 ### Model limits and the Level-1 A/B reference
 
-- Asymptotics of the unified expression: for `v_ds ≪ v_knee`,
-  `i_d → k_p·v_ov_eff·v_ds·(1 + …)` (ohmic, m_triode = 1); for `v_ds ≫ v_knee`,
-  `i_d → 0.5·k_p·v_ov_eff²·(0.5 + k_theta·v_ov_eff)/(1 + k_theta·v_ov_eff)² / (1 + v_knee/v_vsat)`.
+- Asymptotics of the unified expression (`v_ov_g` below means `v_ov_eff2` —
+  with `k_beta_trap = 0` it reduces to `v_ov_eff`): for `v_ds ≪ v_knee`,
+  `i_d → k_p·v_ov_g·v_ds·(1 + …)` (ohmic, m_triode = 1); for `v_ds ≫ v_knee`,
+  `i_d → 0.5·k_p·v_ov_g²·(0.5 + k_theta·v_ov_g)/(1 + k_theta·v_ov_g)² / (1 + v_knee/v_vsat)`.
 - `vdmos_id_level1()` implements Level-1 **as actually implemented**: knee at
   `v_ds = v_ov/mtriode`, verified against LTspice 26.0.1 `.meas` (the C1 table
   in "Why"; min i_d over 0–6 V = 4.0 A for every mtriode — no negative-gds
@@ -419,6 +485,12 @@ at 1.0 in float) and decays smoothly to zero below.
 - "Cap off" is reached by **leaving v_ovmax out of the free set**, not by
   driving it to the lower bound: v_ovmax → 0⁺ means "hard cap at zero volts",
   the opposite of off. `v_ovmax = 0` exactly is the identity transform.
+- The trap-filling gain is applied **after** the cap and is evaluated directly
+  (no log space needed): `dv_ov_eff2/dv_ov_eff = 1 + 2·k_beta_trap·v_ov_eff`
+  exceeds 1 — the composite gate gain `dv_ov_eff2/dv_ov` is bounded by
+  `1 + 2·k_beta_trap·v_ovmax` with the cap active. It stays POSITIVE for
+  k_beta_trap ≥ 0 (negative values raise ValueError), which is all the
+  package-R bracket proof needs.
 
 ### Package-R solver
 
@@ -428,6 +500,13 @@ at 1.0 in float) and decays smoothly to zero below.
   exactly (every model term is gated by v_ds or tanh(v_ds/v_knee)), which also
   makes clamping the internal v_ds at 0 harmless when a trial point
   overshoots. Partial derivatives are central differences (the model is C1).
+- The bracket proof needs the partials **non-negative** (monotonicity), not
+  ≤ 1: the trap-filling gain multiplies ∂f/∂v_gs by
+  `1 + 2·k_beta_trap·v_ov_eff` — it inflates the bracket upper bound
+  `i_max = f(v_ds, v_gs)` and steepens Newton (the stall guard fires more
+  often), but monotonicity survives for k_beta_trap ≥ 0 and k_beta_trap < 0
+  is rejected outright. Tested with r_s > 0 and the gain active
+  (`tests/test_overdrive_gain.py`).
 - The solver **raises RuntimeError** on non-convergence; it never silently
   returns an unconverged current.
 - Forward polarity only: the velocity-saturation divisor `1 + v/v_vsat` is
