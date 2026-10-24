@@ -94,9 +94,13 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth: `names.xlsx`)
 - `m_triode` is the one carve-out: `vdmos_id_level1()` is a foreign-model
   adapter for LTspice's Level-1, and keeping the model-card spelling `mtriode`
   *is* the mapping. Everything else in this repo follows the convention.
-- CSV on-disk headers stay `vgs,vds,ids` — an external contract with the curve
-  digitizer and the already-digitised datasheet files. `data.py` maps the
-  attribute names (`CurveSet.v_gs/v_ds/i_d`) to those header spellings.
+- CSV on-disk headers: `load_csv()` accepts **both** external spellings,
+  matched per column, case-insensitively, order-free (extra columns like the
+  digitizer's `index` are ignored): the legacy SPICE-style `vgs,vds,ids`
+  (what `save_csv()` writes, and the already-digitised datasheet files) and
+  the digitizer/model naming `index,V_ds,I_d,V_gs` (what `curve_digitizer`
+  exports). `data.py` maps the attribute names (`CurveSet.v_gs/v_ds/i_d`) to
+  those header spellings — no per-script loader workarounds (session 20).
 
 ### Gate-overdrive charge cap (v_ovmax, k_ovsharp)
 

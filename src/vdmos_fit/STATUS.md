@@ -1,19 +1,22 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-23 (session 19 — interface-trap-filling gain
-`v_ov_eff2`/`k_beta_trap` LANDED in the channel model, off by default;
-session 18 investigated the IMCQ120R004M2H two-temperature IV fits and the
-gain probe — committed as `3385ee2`, findings in
-`out/IMCQ120_TEMPERATURE_REPORT.md` + HANDOVER.md; session 17 landed the
-capacitance/charge model — see CAP_SPEC.md).
+*Snapshot: 2026-10-24 (session 20 — CSV header contract: `load_csv()` now
+accepts BOTH the legacy `vgs,vds,ids` and the digitizer `index,V_ds,I_d,V_gs`
+spelling, HANDOVER queue item 6 CLOSED; session 19 landed the
+interface-trap-filling gain `v_ov_eff2`/`k_beta_trap` in the channel model,
+off by default — committed as `8574ce2`; session 18 investigated the
+IMCQ120R004M2H two-temperature IV fits and the gain probe — committed as
+`3385ee2`, findings in `out/IMCQ120_TEMPERATURE_REPORT.md` + HANDOVER.md;
+session 17 landed the capacitance/charge model — see CAP_SPEC.md).
 Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Nineteen sessions, committed to `main` (session 18 added the IMCQ120R004M2H
+Twenty sessions, committed to `main` (session 18 added the IMCQ120R004M2H
 SiC IV data + two-temperature fits + the gain probe (`3385ee2`); session 19
 landed the interface-trap-filling gain `v_ov_eff2`/`k_beta_trap` in the channel
-model — uncommitted at snapshot time, see the session-19 section below;
+model (`8574ce2`); session 20 closed the CSV header contract — `load_csv()`
+reads both header spellings natively, see the session-20 section below;
 session 11 renamed every parameter
 to the `<type prefix>_<suffix>` convention — names.xlsx + README "Naming
 convention" are the mapping, tag `pre-rename-2026-10` is the escape hatch, and
@@ -526,6 +529,30 @@ scipy-version solver-trajectory artifact (`tooling/workspace/outputs/
 _s19_drift_ab*.log`): identical code lands at 339.02 under 1.18.1 and at
 1287.03 under 1.16.0, every SENSED parameter identical to ~1e-5 relative
 either way. Quote the curve, never the valley point.
+
+## CSV header contract (session 20) — queue item 6 CLOSED
+
+`load_csv()` now accepts **both** external I-V header spellings, matched per
+column, case-insensitively, order-free; extra columns (the digitizer `index`)
+are ignored and the spellings may be mixed in one file:
+
+    legacy SPICE-style   vgs,vds,ids            (what save_csv() writes)
+    digitizer/model      index,V_ds,I_d,V_gs    (what curve_digitizer exports)
+
+Decision (user-directed): extend `data.py` rather than rename the CSVs — the
+on-disk files are external artifacts and both spellings are legitimate
+contracts. `save_csv()` keeps writing the legacy spelling (bit-identical
+round trip pinned by `tests/test_data.py::test_save_load_roundtrip_bit_identical`).
+The per-script `load_imcq()` workarounds are deleted from
+`scripts/fit_imcq120_temperature.py` and `scripts/fit_imcq120_gain_probe.py`
+(both now call `load_csv` directly; the gain probe re-run reproduces the
+session-18 anchors, scratch `tooling/workspace/outputs/_s20_gainprobe_loadcsv.log`).
+New `tests/test_data.py` (8 tests): both spellings load identically, mixed
+spelling/case/spacing, `index` ignored, the error message lists both
+accepted spellings, real IMCQ CSVs (78/73 pts) and the ST8L65 official CSV
+(41 pts) load natively. `data/README.md` documents both contracts and the
+IMCQ IV datasets; the ST8L65 header description was corrected to the actual
+`index,Vds,Ids,Vgs` (it always loaded — matching is case-insensitive).
 
 ## Open problems
 

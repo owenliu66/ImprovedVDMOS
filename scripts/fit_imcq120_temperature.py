@@ -76,7 +76,6 @@ Key findings (see out/IMCQ120_TEMPERATURE_REPORT.md):
 
 from __future__ import annotations
 
-import csv
 import json
 import sys
 from pathlib import Path
@@ -91,7 +90,7 @@ from scipy.optimize import brentq  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from vdmos_fit import CurveSet, Params, fit, vdmos_id  # noqa: E402
+from vdmos_fit import CurveSet, Params, fit, load_csv, vdmos_id  # noqa: E402
 from vdmos_fit.fit import FitResult, identifiability  # noqa: E402
 
 OUT = ROOT / "out"
@@ -111,16 +110,6 @@ MULTI = [dict(k_p=150.0, k_kneesharp=2.0, v_ovmax=4.0, k_ovsharp=10.0, v_dbsat=1
          dict(k_p=500.0, k_kneesharp=2.0, v_ovmax=1.8, k_ovsharp=15.0, v_dbsat=0.8),
          dict(k_p=60.0, k_kneesharp=0.5, v_ovmax=8.0, k_ovsharp=8.0, v_dbsat=3.0),
          dict(k_p=1000.0, k_kneesharp=1.5, v_ovmax=1.2, k_ovsharp=30.0, v_dbsat=0.3)]
-
-
-def load_imcq(path: Path) -> CurveSet:
-    """IMCQ digitizer export uses `index,V_ds,I_d,V_gs` (not the legacy vgs/vds/ids)."""
-    with path.open(newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    return CurveSet(np.array([float(r["V_gs"]) for r in rows]),
-                    np.array([float(r["V_ds"]) for r in rows]),
-                    np.array([float(r["I_d"]) for r in rows]),
-                    label=path.stem)
 
 
 def multi_fit(data: CurveSet, base: Params, rmax: float) -> FitResult:
@@ -219,8 +208,8 @@ def plot_iv(d: CurveSet, p: Params, title: str, fname: str) -> None:
 
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    d25 = load_imcq(ROOT / "data" / "IMCQ120R004M2H_IV_25C.csv")
-    d175 = load_imcq(ROOT / "data" / "IMCQ120R004M2H_IV_175C.csv")
+    d25 = load_csv(ROOT / "data" / "IMCQ120R004M2H_IV_25C.csv")
+    d175 = load_csv(ROOT / "data" / "IMCQ120R004M2H_IV_175C.csv")
 
     print("=== 25 C multi-start (cap free, k_lambda = 0) ===")
     r25 = multi_fit(d25, BASE25, rmax=3.7e-3)

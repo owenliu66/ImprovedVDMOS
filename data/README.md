@@ -4,10 +4,17 @@ Measured or digitised I-V data, one CSV per device/condition.
 
 ## Format
 
+I-V files: `load_csv()` accepts **both** external header spellings, matched
+per column, case-insensitively, order-free (extra columns like `index` are
+ignored):
+
 ```csv
-v_gs,v_ds,i_d
+vgs,vds,ids            <- legacy SPICE-style (what save_csv() writes)
 4.0,0.05,0.812
-4.0,1.0,15.3
+...
+
+index,V_ds,I_d,V_gs    <- digitizer/model naming (what curve_digitizer exports)
+1,0.05,0.812,4.0
 ...
 ```
 
@@ -67,8 +74,8 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   typical output curves (v_gs = 5, 6, 7, 8, 9, 10 V; v_ds 0–19 V; i_d up to
   ~240 A; print code GPDP160620251503OCH). Use it for the knee-shape check
   of the fitted curves.
-- **Contents:** 41 points, header `index,v_ds,i_d,v_gs` (`load_csv` matches
-  columns by header, so order/extras don't matter). Seven gate curves:
+- **Contents:** 41 points, header `index,Vds,Ids,Vgs` (`load_csv` matches
+  columns by header, so order/extras/case don't matter). Seven gate curves:
   v_gs = 3.7, 5, 6, 7, 8, 9, 10 V; v_ds range 0–20 V.
 - **Spec anchors included:** the v_gs(th) point (v_gs = v_ds = 3.7 V,
   i_d = 250 µA) — the only off-state point, anchoring v_sub/v_th0 through the
@@ -108,6 +115,21 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
   the curves. The temperature law (Xti/Eg) IS pinned by the
   three temperatures (v_eg ≈ 1.08 eV ≈ silicon). Fit protocol:
   `scripts/fit_st8l65_diode.py`.
+
+### IMCQ120R004M2H_IV_25C.csv / IMCQ120R004M2H_IV_175C.csv
+
+- **Device / source:** Infineon IMCQ120R004M2H CoolSiC 1200 V (Kelvin
+  source), typical output curves digitized from the datasheet (rev 1.10)
+  at 25 °C and 175 °C — provenance and fit protocol in
+  `out/IMCQ120_TEMPERATURE_REPORT.md` and `scripts/fit_imcq120_temperature.py`.
+- **Contents:** 78 / 73 points, header `index,V_ds,I_d,V_gs` — the
+  curve_digitizer export spelling, read natively by `load_csv()` since
+  session 20 (the old per-script `load_imcq()` workaround is gone).
+  Gate curves v_gs = 4.2…20 V; v_ds up to ~21 V (curves exit the datasheet
+  1600 A plot frame — that is plot truncation, not a current limit).
+- **Related IMCQ spec CSVs** (`Rdson_Tj_185.2A`, `Vth_Tj`) use the same
+  digitizer export style and are consumed directly by the temperature
+  scripts (not through `load_csv`).
 
 ### ST8L65N044M9_Cap_Vds.csv / IMCQ120R004M2H_Cap_Vds.csv / ISC040N10NM8_Cap_Vds.csv
 

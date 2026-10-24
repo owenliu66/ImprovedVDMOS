@@ -31,8 +31,20 @@ __all__ = [
 # them and the digitised datasheet CSVs already use them), so they keep the
 # old SPICE-style spelling even though the in-code attributes follow the
 # model naming convention. See README, "Naming convention".
+#
+# load_csv() accepts BOTH header spellings, matched per column,
+# case-insensitively, whitespace-tolerant, order-free; extra columns (the
+# digitizer's `index`) are ignored and the two spellings may be mixed in one
+# file (HANDOVER queue item 6, session 20):
+#   legacy SPICE-style   vgs,vds,ids            (what save_csv() writes)
+#   digitizer/model      index,V_ds,I_d,V_gs    (what curve_digitizer exports)
 _CSV_COLUMNS: tuple[str, ...] = ("v_gs", "v_ds", "i_d")
 _CSV_HEADERS: dict[str, str] = {"v_gs": "vgs", "v_ds": "vds", "i_d": "ids"}
+_CSV_ALIASES: dict[str, tuple[str, ...]] = {
+    "v_gs": ("vgs", "v_gs"),
+    "v_ds": ("vds", "v_ds"),
+    "i_d": ("ids", "i_d"),
+}
 
 
 @dataclass(frozen=True)
@@ -67,10 +79,14 @@ class CurveSet:
 
 
 def load_csv(path: str | Path) -> CurveSet:
-    """Read a CSV with header `vgs,vds,ids` (column order flexible, case-insensitive).
+    """Read an I-V CSV in either header spelling (column order flexible, case-insensitive).
 
-    The header spellings are the legacy SPICE-style names -- see
-    :data:`_CSV_COLUMNS`.
+    Accepted spellings (see :data:`_CSV_ALIASES`): the legacy SPICE-style
+    `vgs,vds,ids` -- what :func:`save_csv` writes -- and the digitizer/model
+    naming `index,V_ds,I_d,V_gs` -- what `curve_digitizer` exports. Extra
+    columns (e.g. `index`) are ignored and the spellings may be mixed in one
+    file. The old local `load_imcq()` workaround in the IMCQ scripts is gone:
+    this loader reads those CSVs natively (HANDOVER queue item 6).
     """
     path = Path(path)
     with path.open(newline="", encoding="utf-8") as fh:
@@ -78,14 +94,25 @@ def load_csv(path: str | Path) -> CurveSet:
     if not rows:
         raise ValueError(f"{path} has no data rows")
     cols = {k.strip().lower(): k for k in rows[0] if k}
-    for need in _CSV_HEADERS.values():
-        if need not in cols:
-            raise ValueError(f"{path} missing column '{need}'; header is {list(rows[0])}")
-    get = lambda r, c: float(r[cols[c]])  # noqa: E731
+    found: dict[str, str] = {}
+    missing: list[str] = []
+    for attr, aliases in _CSV_ALIASES.items():
+        for alias in aliases:
+            if alias in cols:
+                found[attr] = cols[alias]
+                break
+        else:
+            missing.append(" or ".join(aliases))
+    if missing:
+        raise ValueError(
+            f"{path} missing column(s) {missing} "
+            f"(accepted: vgs/vds/ids or v_gs/v_ds/i_d, case-insensitive); "
+            f"header is {list(rows[0])}"
+        )
     return CurveSet(
-        np.array([get(r, "vgs") for r in rows]),
-        np.array([get(r, "vds") for r in rows]),
-        np.array([get(r, "ids") for r in rows]),
+        np.array([float(r[found["v_gs"]]) for r in rows]),
+        np.array([float(r[found["v_ds"]]) for r in rows]),
+        np.array([float(r[found["i_d"]]) for r in rows]),
         label=path.stem,
     )
 

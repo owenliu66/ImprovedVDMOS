@@ -66,7 +66,6 @@ CAVEATS before promoting this into the package:
 
 from __future__ import annotations
 
-import csv
 import json
 import sys
 from pathlib import Path
@@ -81,19 +80,11 @@ from scipy.optimize import least_squares  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from vdmos_fit import CurveSet  # noqa: E402
+from vdmos_fit import CurveSet, load_csv  # noqa: E402
 
 OUT = ROOT / "out"
 NAMES = ("k_p", "v_th0", "v_sub", "k_beta", "k_kneesharp", "k_eta", "v_dbsat")
 LOG_IDX = (0, 2, 3, 6)  # packed in log space
-
-
-def load_imcq(path: Path) -> CurveSet:
-    with path.open(newline="", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    return CurveSet(np.array([float(r["V_gs"]) for r in rows]),
-                    np.array([float(r["V_ds"]) for r in rows]),
-                    np.array([float(r["I_d"]) for r in rows]), label=path.stem)
 
 
 def channel_current(v_ds, v_gs, k_p, v_th0, v_sub, k_beta, k_ksh, k_eta, v_dbsat):
@@ -156,8 +147,8 @@ def fit_gain(data: CurveSet, rmax: float, v_th_start: float):
 
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    d25 = load_imcq(ROOT / "data" / "IMCQ120R004M2H_IV_25C.csv")
-    d175 = load_imcq(ROOT / "data" / "IMCQ120R004M2H_IV_175C.csv")
+    d25 = load_csv(ROOT / "data" / "IMCQ120R004M2H_IV_25C.csv")
+    d175 = load_csv(ROOT / "data" / "IMCQ120R004M2H_IV_175C.csv")
 
     print("implied channel overdrive from the near-origin ohmic points (25 C):")
     for vg in (7, 8, 10, 12, 15, 18):
