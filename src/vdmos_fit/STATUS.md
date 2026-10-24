@@ -64,10 +64,13 @@ support: dead Jacobian columns report σ = inf rather than a confident small σ,
 and `on_bounds` flags pinned parameters relative to the bound's magnitude, not
 the search-box width. Current OFFICIAL fits on
 ST8L65N044M9: channel **3.79 % relative RMSE (fit A, 10-param with `k_kneesharp` free, full
-41-point set, rank 8/10, cond 2.19e3)**; diode **4.78 % on 30 points
-(−55/25/150 °C), rank 4/4, cond 6.1e3, v_eg = 1.097 eV**. 154 tests green,
-ruff clean. Datasheet Figure 3 (typical output curves), the body-diode
-forward characteristics CSV, and the three-part C–V + Qg CSVs are on disk
+41-point set, rank 8/10, cond 2.19e3)**; diode **3.91 % on 30 points
+(−55/25/150 °C), v_eg = 1.082 eV ≈ silicon, all three TCs interior**
+(session-15 record; the 4.15 % linear-TC and 4.78 % TC-off fits live on as
+script baselines/probes). Suite green, ruff clean — test totals drift with
+headless Tk skips, don't pin counts. Datasheet Figure 3 (typical output
+curves), the body-diode forward characteristics CSV, the IMCQ120R004M2H
+IV + Rds(on)/V_th-vs-T_j CSVs, and the three-part C–V + Qg CSVs are on disk
 in `data/`.
 
 ## What exists
@@ -81,18 +84,22 @@ Projects/ImprovedVDMOS/
 │                           reference (official device records), ltspice export,
 │                           cli, __main__
 ├── tests/                  test_model, test_fit, test_package_r, test_gate_cap,
-│                           test_drain_softness, test_st8l65_official, test_diode,
+│                           test_drain_softness, test_overdrive_gain, test_data
+│                           (CSV header contract), test_st8l65_official, test_diode,
 │                           test_caps (incl. live LTspice parity), test_cli,
 │                           test_digitizer
-├── scripts/                fit_datasheet.py, fit_st8l65.py (superseded),
+├── scripts/                fit_datasheet.py, fit_st8l65.py (legacy baseline),
 │                           fit_st8l65_nd.py (official channel recipe),
 │                           fit_st8l65_diode.py (official diode recipe),
+│                           fit_imcq120_temperature.py + fit_imcq120_gain_probe.py
+│                           (SiC two-temperature protocol + k_beta_trap probe),
 │                           fit_cmax.py (official c_gdmax extraction),
 │                           export_caps.py (LTspice subckt export),
 │                           roundtrip_demo.py
 ├── data/                   README.md + ST8L65N044M9_IV.csv (41 digitised points)
 │                           + ST8L65N044M9_diode.csv (30 pts, −55/25/150 °C)
 │                           + ST8L65N044M9_Id_Vds_Vgs.png (datasheet Figure 3)
+│                           + IMCQ120R004M2H IV ×2 + Rdson_Tj + Vth_Tj CSVs
 │                           + <part>_Cap_Vds.csv ×3 + <part>_Vgs_Qg.csv ×3
 └── notebooks/              README.md only (empty)
 ```
@@ -129,8 +136,8 @@ Projects/ImprovedVDMOS/
 
 ## Verified state
 
-- **145 tests, all passing** (0–2 Tk digitizer window tests self-skip when
-  the process has no display); `ruff check` clean. Caveat: 8 of the digitizer
+- **Suite green, `ruff check` clean** (161 passed / 2 skipped at the
+  session-20 snapshot). Caveat: 8 of the digitizer
   window tests drive Tk and self-skip when the process has no display — in
   headless runs 0–2 of them skip (flaky per-process), so "N passed, M skipped"
   totals vary; don't pin the count.
@@ -179,7 +186,11 @@ lives in that script's `OFFICIAL` dict, which now re-exports
 `vdmos_fit.reference.ST8L65_OFFICIAL` (single source of truth), and `main()`
 checks each run reproduces it to 1e-3 relative (`OFFICIAL_TOL`) — if a future
 refit drifts, the run says `[STALE]` and the record must be re-promoted
-deliberately. `tests/test_st8l65_official.py` pins the same record against the
+deliberately. Caveat (session 19): a `[STALE]` flag can also be an
+environment artifact — the fit lands at different points of the flat
+σ = inf `k_lambda`/`v_dbsat` valley across scipy versions while every
+SENSED parameter stays put; A/B the interpreter before re-promoting (see
+the session-19 section). `tests/test_st8l65_official.py` pins the same record against the
 measured CSV (RMSE, Ron chord, plateau, v_gs(th), per-curve, k_kneesharp interior, no
 negative gds) so a model/bounds change that moves the official fit fails the
 suite instead of silently invalidating these numbers.
@@ -187,8 +198,9 @@ suite instead of silently invalidating these numbers.
 Free = k_p, v_th0, v_sub, k_lambda, r_d, r_s, v_dbsat, v_ovmax, k_ovsharp, **k_kneesharp**; fixed k_theta = 0,
 v_vsat = 1e4, k_eta = 0, g_k = 0, v_thk = 1.6, v_kovsoft = 0.1 (all measured dead on this
 data); device bounds r_d, r_s ≤ 36 mΩ (datasheet Rds(on)). Global bounds
-widened this session: k_p ≤ 1e4, v_vsat ≤ 1e4, k_lambda 1e-12–1.0, v_dbsat ≤ 1300,
-k_kneesharp ≥ 0.1. Four multi-starts, all four converge to the same basin.
+widened at promotion (session 10): k_p ≤ 1e4, v_vsat ≤ 1e4, k_lambda 1e-12–1.0, v_dbsat ≤ 1300,
+k_kneesharp ≥ 0.1. Four multi-starts (k_kneesharp starts 2.8 = legacy tanh,
+1.5, 6), all four converge to the same basin.
 
 | | **fit A (OFFICIAL, 41 pts)** | fit B (no v_gs=5, 36 pts) |
 |---|---|---|
@@ -215,7 +227,7 @@ diagnostic that isolates how much error the physically unreproducible v_gs = 5
 curve contributes. Fit A is also the better-conditioned and more physical
 record: cond 2.19e3 vs 1.27e4, k_p 579 vs 2354 (fit B's k_p sits on the bound),
 and r_d/r_s are both interior rather than leaning on the bound. Fit B stays in
-the script and in the tables for comparison.
+the script and in the table above for comparison.
 
 **k_lambda and v_dbsat reporting σ = inf is expected, not a fit failure.** The dataset
 stops at v_ds = 20 V and never enters deep saturation, so it carries no CLM or
@@ -232,65 +244,21 @@ v_gs −2…16 V (max 293.7 A); min gds over v_ds 0–200 V × v_gs −2…16 V 
 1e-14 A subthreshold floor, not a physical NDR region. The v_vsat-divisor gds dip
 does not apply (v_vsat fixed at 1e4).
 
-## Superseded reference: 9-param fit (gds-free, k_kneesharp = 0)
+**Promotion history (session 10):** the retired 9-param `k_kneesharp = 0`
+recipe (`scripts/fit_st8l65.py`, kept as the legacy baseline probe) gave
+9.97 % (fit A) / 5.54 % (fit B); freeing `k_kneesharp` roughly halved it to
+the current 3.79 / 1.52 % — the missing physics was the knee SHAPE, not a
+missing circuit element. The v_gs = 5 curve is genuine datasheet data but
+unreproducible by any C¹ model (identical i_d at v_ds = 1.127 and 5.153 V
+requires β = 0 over a 4.6× interval, then β ≈ 0.12); it costs ~21 % on
+fit A — that is what fit B isolates.
 
-`scripts/fit_st8l65.py`; outputs `out/st8l65_capfit.png`,
-`out/st8l65_capfit_params.txt`. Free = k_p, v_th0, v_sub, k_lambda, r_d, r_s, v_dbsat,
-v_ovmax, k_ovsharp; fixed k_theta = 0, v_vsat = 1e4, k_eta = 0, g_k = 0, v_thk = 1.6, v_kovsoft = 0.1
-(measured dead on this data); device bounds r_d, r_s ≤ 36 mΩ (datasheet
-Rds(on)) and k_lambda ≤ 0.004 1/V. Four multi-starts, all converge to the same
-basin in both fits.
-
-| | fit A (full, 41 pts) | fit B (no v_gs=5, 36 pts) |
-|---|---|---|
-| RMSE_rel | **9.97 %** | **5.54 %** |
-| k_p | 63.59 | 50.58 |
-| v_th0 | 4.6656 | 4.4459 |
-| v_sub | 0.0234 — dead (σ = inf) | **0.1836 — live, σ = 3.5** |
-| k_lambda | **0.004 PINNED UPPER** | **0.004 PINNED UPPER** |
-| r_d | 31.92 mΩ | 29.85 mΩ |
-| r_s | 3.6e-9 **PINNED LOWER** | 0.66 mΩ |
-| v_dbsat | **4.244** | **5.562** |
-| v_ovmax | 2.610 V | 2.904 V |
-| k_ovsharp | 6.203 | 10.241 |
-| r_d+r_s | 31.92 mΩ | 30.50 mΩ (chord 34.5 mΩ) |
-| plateau v_gs=10 @19.7 V | **226.4 A** (meas 240.2, −5.7 %) | **223.9 A** (−6.8 %) |
-| v_gs(th) point (3.7, 3.7) | 0 µA — abandoned | **250.0 µA — exact, via channel** |
-| rank / cond | **8/9** / 2.9e4 | **9/9** / 3.75e4 |
-| v_gs≥6 only | 5.83 % | 5.62 % |
-
-Fit B is the fair model-quality number: the v_gs = 5 curve is genuine
-datasheet data but unreproducible by any C¹ model (identical i_d at
-v_ds = 1.127 and 5.153 V requires β = 0 over a 4.6× interval, then
-β ≈ 0.12), and it costs 21.3 % on fit A.
-
-## ST8L65 fit with `k_kneesharp` free (session 10) — now the OFFICIAL recipe
-
-`scripts/fit_st8l65_nd.py`: same fit-A/fit-B recipe, `k_kneesharp` added to the free
-tuple (start 2.8 = legacy tanh; linear space, bound **0.1–40** — relaxed from
-0.5 this session because the optimum sits below the old guard). Outputs
-`out/st8l65_nd_params.txt`, `out/st8l65_nd_probe.txt` (pre-fit sensitivity +
-identifiability + probes), `out/st8l65_nd_fit.png`,
-`out/st8l65_nd_percurve.png` (i_d vs v_ds at each measured v_gs — the Figure 3
-knee check), `out/st8l65_nd_overlay.png`. The fit-A column below **is** the
-official record; the table is kept for the A-vs-B comparison.
-
-| | k_kneesharp fit A (41 pts, OFFICIAL) | k_kneesharp fit B (36 pts) | superseded 9-param fit B (k_kneesharp = 0) |
-|---|---|---|---|
-| RMSE_rel | **3.79 %** (was 9.97) | **1.52 %** (was 5.54) | 5.54 % |
-| k_kneesharp | **0.4359 — interior** | **0.4081 — interior** | 0 |
-| k_lambda | 5.1e-10 — pinned LOWER 1e-12 | 1.9e-12 — pinned LOWER | 0.004 pinned UPPER |
-| plateau v_gs=10 @19.7 V | 246.9 A (+2.8 %) | 244.7 A (+1.9 %) | 223.9 A (−6.8 %) |
-| v_gs(th) point (3.7, 3.7) | 259.8 µA | 249.3 µA | 250.0 µA |
-| r_d+r_s | 31.68 mΩ | 33.83 mΩ | 30.50 mΩ |
-| v_sub | 0.2433 V | 0.2475 V | 0.1836 V |
-| rank / cond | 8/10 / 2.19e3 | 8/10 / 1.27e4 | 9/9 / 3.75e4 |
-
-Findings:
+Findings (promotion record; probe details in `out/st8l65_nd_probe.txt`):
 
 - **The data wants a knee SOFTER than the legacy tanh, and softer than the old
   0.5 guard allowed**: k_kneesharp lands at 0.436 (fit A) / 0.408 (fit B), interior to
-  the relaxed (0.1, 40) bound. The k_kneesharp lower-bound probe reaches the same
+  the relaxed (0.1, 40) bound (relaxed from 0.5 at promotion because the optimum
+  sits below the old guard). The k_kneesharp lower-bound probe reaches the same
   1.52 % from starts at k_kneesharp = 0.5 and 0.3 — a stable interior optimum, so the
   0.1 floor is no longer load-bearing. k_kneesharp → 0 collapses the current, so lower
   is not physical anyway; do not lower the floor further.
@@ -299,8 +267,6 @@ Findings:
   bias-dependent drain element (Queue 2) is NOT needed on this data. k_lambda now
   pins at the LOWER 1e-12 — the data wants *zero* CLM once the knee shape is
   free, which is the expected answer for a 650 V part measured only to 20 V.
-- gds ≥ 0 everywhere for the official fit (min −3e-12 S = FD noise at the
-  deep-off floor); the v_vsat-divisor dip caveat does not apply (v_vsat = 1e4).
 - **k_theta↔v_vsat probe** (k_theta, v_vsat freed on fit-B data): both push to their
   bounds (k_theta → 1e-4 LOWER, v_vsat → 1e4 UPPER) — the data rejects that
   mechanism outright. Freeing v_vsat up to 1e4 improved the no-k_kneesharp fit from

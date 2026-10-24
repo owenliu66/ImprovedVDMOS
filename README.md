@@ -347,11 +347,15 @@ promotion section in STATUS.
 
 ## Project status
 
-Fifteen sessions, all committed to `main` (session 13 closed the body-diode
-pending list; session 14 added the diode temperature coefficients
-`a_ikf`/`a_rdiode` and `b_rdiode` (Trs2), and promoted the TC+Trs2 fit to the
-official record). The
-package provides one C¹ continuous
+Twenty sessions, all committed to `main` (session 15 promoted the 7-param
+TC+Trs2 diode fit to the official record; sessions 16–17 settled and landed
+the capacitance/charge model — `caps.py` charge-master LUTs + c_gd splice +
+`extract_cmax()` from Qg + `ltspice.py` nonlinear-cap export with live parity;
+session 18 digitized the IMCQ120R004M2H SiC IV data and ran the
+two-temperature fits; session 19 landed the interface-trap-filling gain
+`k_beta_trap` (off by default); session 20 closed the CSV header contract —
+`load_csv()` now accepts both the legacy `vgs,vds,ids` and the digitizer
+`index,V_ds,I_d,V_gs` spellings). The package provides one C¹ continuous
 drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp,
 interface-trap-filling gain k_beta_trap, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
@@ -359,7 +363,8 @@ package r_d/r_s, **plus the body diode** (LTspice diode DC branch with
 high-injection compression and the Xti/Eg temperature law, terminal-wired,
 bypassing r_d/r_s), plus bounded least-squares extraction with identifiability
 diagnostics (dead Jacobian columns report σ = inf; `on_bounds` scales with the
-bound's magnitude, not the box width). Two mechanisms were added and then
+bound's magnitude, not the box width), plus a general PDF curve digitizer
+(`src/curve_digitizer`). Two mechanisms were added and then
 deleted as unsupported by the data: `kappa` (a voltage divider posing as a
 package resistance) and a `gds·v_ds` leak (a one-point parameter that flattened
 the subthreshold curve) — the off state is now the gate-dependent softplus
@@ -368,14 +373,19 @@ floor (plus the diode's reverse saturation when the diode is on). Current
 (fit A, 10-param with `k_kneesharp` free, full 41-point set), Jacobian rank 8/10,
 cond 2.19e3**; diode **3.91 % on 30 points (−55/25/150 °C), v_eg =
 1.082 eV ≈ silicon bandgap, TCs a_ikf = +0.83 %/°C / a_rdiode = +0.48 %/°C /
-b_rdiode = −1.78e-5/°C²**,
-154 tests green (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
+b_rdiode = −1.78e-5/°C²**
+(baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
-not a fit failure. The Q(V) charge model **landed** (charge-master LUTs +
+not a fit failure. The SiC IMCQ120R004M2H two-temperature channel fits
+(with `k_beta_trap`: 4.61 / 3.30 % at 25 / 175 °C) are protocol probes in
+`scripts/` + `out/IMCQ120_TEMPERATURE_REPORT.md`, not yet an official record.
+The Q(V) charge model **landed** (charge-master LUTs +
 c_gd splice + c_gdmax extraction from Qg + LTspice nonlinear-cap export with
 live parity — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)).
-Remaining gaps: HV
-leakage, thermal node, full-device LTspice subckt — details and open problems in
+Suite green (test totals drift as headless Tk digitizer tests self-skip —
+don't pin counts). Remaining gaps: IMCQ transfer-curve digitization + joint
+multi-temperature fit, v_gs-dependent C_gd blend, full-device LTspice subckt,
+HV leakage, thermal node — details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
 ## Layout
@@ -396,8 +406,12 @@ ImprovedVDMOS/
 │   ├── cli.py              `vdmos-fit` command
 │   ├── STATUS.md           session log, open problems, missing architecture
 │   └── CAP_SPEC.md         settled capacitance/charge-model design spec
+├── src/curve_digitizer/    PDF curve digitizer (axis calibration, markers,
+│                           skeletonization) — `curve-digitizer` console script
 ├── tests/                  pytest suite (model regressions + fit round-trips,
-│                           test_diode.py incl. LTspice cross-validation)
+│                           test_diode.py incl. LTspice cross-validation,
+│                           test_caps.py incl. live LTspice parity,
+│                           test_data.py CSV header contract)
 ├── scripts/                thin entry points (no logic here)
 ├── data/                   measured/digitised CSVs (see data/README.md)
 ├── notebooks/              exploratory work
@@ -411,7 +425,8 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # 154 tests green (digitizer Tk window tests self-skip headless)
+pytest                            # suite green (digitizer Tk window tests self-skip
+                                  # headless; totals drift — don't pin the count)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
@@ -604,9 +619,11 @@ argparse fills subparser defaults into the namespace unconditionally.
 ## Scope / not yet implemented
 
 This package is the **channel current plus package series resistance plus the
-body-diode DC branch**. The
-agreed architecture keeps the rest of the subcircuit as-is: charge-based Q(V)
-capacitors (symbolic differentiation, guarantees charge conservation), split
+body-diode DC branch plus the charge-master capacitance/charge model**
+(`caps.py` + `ltspice.py` nonlinear-cap delta subckt — see CAP_SPEC.md; the
+Q= ramp-sum export makes LTspice's symbolic dQ/dx exactly the sampled C
+staircase, so charge conservation is structural). The
+agreed architecture keeps the rest of the subcircuit as-is: split
 series R for channel/drift (intrinsic; the *package* r_d/r_s are now in the model
 itself), body-diode recovery charge Qrr (the static diode I–V is in; the
 reverse-recovery and HV-leakage elements are not), and the `Tj` node for
