@@ -120,16 +120,51 @@ from Q(V) and double-pulse Eon/Eoff, handled separately.
 
 - **Device / source:** Infineon IMCQ120R004M2H CoolSiC 1200 V (Kelvin
   source), typical output curves digitized from the datasheet (rev 1.10)
-  at 25 °C and 175 °C — provenance and fit protocol in
-  `out/IMCQ120_TEMPERATURE_REPORT.md` and `scripts/fit_imcq120_temperature.py`.
+  at 25 °C and 175 °C. Official model: `reference.py::IMCQ120_JOINT`
+  (session-21 joint multi-temperature fit — protocol
+  `scripts/fit_imcq120_joint.py`, report
+  `out/IMCQ120_JOINT_FIT_REPORT.md`, pinned by
+  `tests/test_imcq120_official.py`); the session-18 per-temperature report
+  `out/IMCQ120_TEMPERATURE_REPORT.md` was deleted in session 21 (durable
+  findings carried in the joint report §8) and
+  `scripts/fit_imcq120_temperature.py` / `fit_imcq120_gain_probe.py` stay as
+  historical baselines.
 - **Contents:** 78 / 73 points, header `index,V_ds,I_d,V_gs` — the
   curve_digitizer export spelling, read natively by `load_csv()` since
   session 20 (the old per-script `load_imcq()` workaround is gone).
   Gate curves v_gs = 4.2…20 V; v_ds up to ~21 V (curves exit the datasheet
   1600 A plot frame — that is plot truncation, not a current limit).
 - **Related IMCQ spec CSVs** (`Rdson_Tj_185.2A`, `Vth_Tj`) use the same
-  digitizer export style and are consumed directly by the temperature
-  scripts (not through `load_csv`).
+  digitizer export style and are consumed directly by the joint-fit script
+  and the pinned record test (not through `load_csv`); they pin `r_d(T)`
+  (quadratic TC law) and `v_th0(T)` in the official record.
+
+### IMCQ120R004M2H_Transfer.csv
+
+- **Device / source:** Infineon IMCQ120R004M2H, transfer characteristic
+  i_d vs V_GS at V_DS = 20 V, T_j = 25/175/200 °C — digitized from the
+  datasheet (rev 1.10, p. 9) with `curve_digitizer` for the session-21
+  joint multi-temperature fit (`scripts/fit_imcq120_joint.py`,
+  `out/IMCQ120_JOINT_FIT_REPORT.md`). No `.meta.txt` sidecar — this entry
+  is the provenance record.
+- **Contents:** 23 rows, header `index,V_gs,I_d,condition` (condition =
+  `"V_ds=20V,T_j=25C"` style, parsed by the script-local loader — same
+  pattern as the Qg `condition` column; `load_csv()` does NOT read this
+  file, there is no `V_ds` column).
+- **Digitization limit kept, not cleaned:** the 175 °C and 200 °C curves
+  are indistinguishable below V_gs = 12 V on the datasheet figure, so no
+  points were digitized there; the two curves cross at 12.025 V / 999.1 A
+  and that crossing point is carried once per curve (rows 22–23 are the
+  same point for T_j = 175 and 200 °C). Residuals exist only where data
+  exists.
+- **Role in the fit:** this is the data that senses the high-v_gs shape
+  (it fixed the 3650 A gain-fit overshoot at v_gs = 18 / V_DS = 20) and
+  the third temperature that pins the `r_d(T)` law together with the
+  Rds(on)-Tj chords. The joint fit that consumed it is now the **official
+  IMCQ record** (`reference.py::IMCQ120_JOINT`, pinned by
+  `tests/test_imcq120_official.py`). The figure itself is a fitted input —
+  after the joint fit quote the model-vs-digitized residuals (±3.7 %), not
+  the figure read.
 
 ### ST8L65N044M9_Cap_Vds.csv / IMCQ120R004M2H_Cap_Vds.csv / ISC040N10NM8_Cap_Vds.csv
 

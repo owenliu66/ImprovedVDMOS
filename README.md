@@ -190,7 +190,11 @@ plateau ~11 %, so k_beta_trap ↔ v_ovmax anti-correlate (synthetic round trip:
 corr ≈ −0.85) and v_ovmax drops to compensate. The official ST8L65 record
 (3.79 %, `reference.py`) keeps k_beta_trap **out of the free set** and stays
 bit-identical; if it is ever freed on a silicon part, re-quote the record and
-report the correlation — never mix records.
+report the correlation — never mix records. The same doctrine applies inside
+the official IMCQ record (session 21): there k_beta_trap IS free and
+anti-correlates with k_p (corr −0.95, k_p25 9.32 / k_bt25 0.469 vs the per-T
+anchors 25.74 / 0.057) — the composite `k_p(T)·v_ov_eff2(T)` is the record,
+never the pair.
 
 ### Drain-knee softness (k_kneesharp)
 
@@ -347,15 +351,17 @@ promotion section in STATUS.
 
 ## Project status
 
-Twenty sessions, all committed to `main` (session 15 promoted the 7-param
-TC+Trs2 diode fit to the official record; sessions 16–17 settled and landed
-the capacitance/charge model — `caps.py` charge-master LUTs + c_gd splice +
-`extract_cmax()` from Qg + `ltspice.py` nonlinear-cap export with live parity;
-session 18 digitized the IMCQ120R004M2H SiC IV data and ran the
-two-temperature fits; session 19 landed the interface-trap-filling gain
-`k_beta_trap` (off by default); session 20 closed the CSV header contract —
-`load_csv()` now accepts both the legacy `vgs,vds,ids` and the digitizer
-`index,V_ds,I_d,V_gs` spellings). The package provides one C¹ continuous
+Twenty-one sessions, all committed to `main` except the session-21 record
+work (session 15 promoted the 7-param TC+Trs2 diode fit to the official
+record; sessions 16–17 settled and landed the capacitance/charge model —
+`caps.py` charge-master LUTs + c_gd splice + `extract_cmax()` from Qg +
+`ltspice.py` nonlinear-cap export with live parity; session 18 digitized the
+IMCQ120R004M2H SiC IV data and ran the two-temperature fits; session 19 landed
+the interface-trap-filling gain `k_beta_trap` (off by default); session 20
+closed the CSV header contract — `load_csv()` now accepts both the legacy
+`vgs,vds,ids` and the digitizer `index,V_ds,I_d,V_gs` spellings; session 21
+closed the IMCQ joint multi-temperature fit and promoted it to the official
+IMCQ record). The package provides one C¹ continuous
 drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp,
 interface-trap-filling gain k_beta_trap, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
@@ -376,16 +382,24 @@ cond 2.19e3**; diode **3.91 % on 30 points (−55/25/150 °C), v_eg =
 b_rdiode = −1.78e-5/°C²**
 (baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
 stops at v_ds = 20 V and carries no deep-saturation information — expected,
-not a fit failure. The SiC IMCQ120R004M2H two-temperature channel fits
-(with `k_beta_trap`: 4.61 / 3.30 % at 25 / 175 °C) are protocol probes in
-`scripts/` + `out/IMCQ120_TEMPERATURE_REPORT.md`, not yet an official record.
+not a fit failure. The SiC IMCQ120R004M2H channel model is now an **official
+record** too: `IMCQ120_JOINT` — the session-21 joint multi-temperature fit
+(IV 25/175 °C + transfer 25/175/200 °C @20 V + Rds(on)-Tj + Vth-Tj, 200 points
+/ 29 temperatures, TC laws as the only extra unknowns, **1.93 % relative
+RMSE**; quadratic `r_d(T)`, freed `k_theta`, `k_lambda ≈ 0`), pinned by
+`tests/test_imcq120_official.py`; protocol
+`scripts/fit_imcq120_joint.py`, report
+`out/IMCQ120_JOINT_FIT_REPORT.md` (the session-18 per-T report was deleted
+session 21; its durable findings are carried in that report's §8; the per-T
+scripts stay as historical baselines).
 The Q(V) charge model **landed** (charge-master LUTs +
 c_gd splice + c_gdmax extraction from Qg + LTspice nonlinear-cap export with
 live parity — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)).
 Suite green (test totals drift as headless Tk digitizer tests self-skip —
-don't pin counts). Remaining gaps: IMCQ transfer-curve digitization + joint
-multi-temperature fit, v_gs-dependent C_gd blend, full-device LTspice subckt,
-HV leakage, thermal node — details and open problems in
+don't pin counts). Remaining gaps: v_gs-dependent C_gd blend,
+full-device LTspice subckt (incl. the Kelvin-aware `r_s` split, now with
+quantitative targets from the IMCQ record), HV leakage, thermal node —
+details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
 ## Layout
@@ -400,7 +414,8 @@ ImprovedVDMOS/
 │   ├── params.py           Params dataclass, bounds, log-space packing
 │   ├── data.py             CurveSet / DiodeCurveSet / CapCurveSet / QgCurveSet, CSV I/O
 │   ├── fit.py              least_squares extraction + identifiability (+ fit_diode)
-│   ├── reference.py        official fitted device records (channel + diode + caps)
+│   ├── reference.py        official fitted device records (ST8L65 channel +
+│   │                       diode, IMCQ120 joint multi-T, caps ×3)
 │   ├── ltspice.py          LTspice export: charge-master nonlinear-cap subckt
 │   ├── plotting.py         output/transfer/gds/overlay plots
 │   ├── cli.py              `vdmos-fit` command
@@ -409,9 +424,10 @@ ImprovedVDMOS/
 ├── src/curve_digitizer/    PDF curve digitizer (axis calibration, markers,
 │                           skeletonization) — `curve-digitizer` console script
 ├── tests/                  pytest suite (model regressions + fit round-trips,
-│                           test_diode.py incl. LTspice cross-validation,
-│                           test_caps.py incl. live LTspice parity,
-│                           test_data.py CSV header contract)
+│                           test_st8l65_official / test_imcq120_official pin the
+│                           official records, test_diode.py incl. LTspice
+│                           cross-validation, test_caps.py incl. live LTspice
+│                           parity, test_data.py CSV header contract)
 ├── scripts/                thin entry points (no logic here)
 ├── data/                   measured/digitised CSVs (see data/README.md)
 ├── notebooks/              exploratory work

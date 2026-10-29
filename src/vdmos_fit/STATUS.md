@@ -1,18 +1,34 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-24 (session 20 — CSV header contract: `load_csv()` now
-accepts BOTH the legacy `vgs,vds,ids` and the digitizer `index,V_ds,I_d,V_gs`
-spelling, HANDOVER queue item 6 CLOSED; session 19 landed the
-interface-trap-filling gain `v_ov_eff2`/`k_beta_trap` in the channel model,
-off by default — committed as `8574ce2`; session 18 investigated the
-IMCQ120R004M2H two-temperature IV fits and the gain probe — committed as
-`3385ee2`, findings in `out/IMCQ120_TEMPERATURE_REPORT.md` + HANDOVER.md;
-session 17 landed the capacitance/charge model — see CAP_SPEC.md).
+*Snapshot: 2026-10-25 (session 21 — HANDOVER PART 1 CLOSED and PROMOTED: the
+IMCQ120R004M2H transfer characteristic (V_DS = 20 V, 25/175/200 °C) was
+digitized and a JOINT multi-temperature fit (both IV sets + transfer +
+Rds(on)-Tj + Vth-Tj, TC laws as the only extra unknowns) landed as
+`scripts/fit_imcq120_joint.py` and is now the **OFFICIAL IMCQ record**
+(`reference.py::IMCQ120_JOINT`, pinned by `tests/test_imcq120_official.py`);
+the session-18 `out/IMCQ120_TEMPERATURE_REPORT.md` was **deleted** (durable
+findings carried into `out/IMCQ120_JOINT_FIT_REPORT.md` §8 — the joint-fit
+report is now the IMCQ document). Headline results in that report and the
+session-21 section below; session 20 closed the CSV header contract —
+`load_csv()` reads both header spellings natively, see the session-20 section
+below; session 19 landed the interface-trap-filling gain `v_ov_eff2`/
+`k_beta_trap` in the channel model, off by default — committed as `8574ce2`;
+session 18 investigated the IMCQ120R004M2H two-temperature IV fits and the
+gain probe — committed as `3385ee2` (its report was deleted session 21;
+durable findings in the joint report §8); session 17 landed the
+capacitance/charge model — see CAP_SPEC.md).
 Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Twenty sessions, committed to `main` (session 18 added the IMCQ120R004M2H
+Twenty-one sessions, committed to `main` (session 21 closed HANDOVER PART 1:
+the IMCQ120R004M2H joint multi-temperature fit — transfer-curve digitization +
+one residual vector over IV/transfer/Rds(on)-Tj/Vth-Tj with TC laws as the only
+extra unknowns, quadratic `r_d(T)` and freed `k_theta` per user direction,
+then **promoted to the official IMCQ record** `IMCQ120_JOINT` with the
+session-18 temperature report deleted (uncommitted at snapshot time:
+`scripts/fit_imcq120_joint.py`, `reference.py` record,
+`tests/test_imcq120_official.py`, data-README entry, README, this section); session 18 added the IMCQ120R004M2H
 SiC IV data + two-temperature fits + the gain probe (`3385ee2`); session 19
 landed the interface-trap-filling gain `v_ov_eff2`/`k_beta_trap` in the channel
 model (`8574ce2`); session 20 closed the CSV header contract — `load_csv()`
@@ -67,9 +83,14 @@ ST8L65N044M9: channel **3.79 % relative RMSE (fit A, 10-param with `k_kneesharp`
 41-point set, rank 8/10, cond 2.19e3)**; diode **3.91 % on 30 points
 (−55/25/150 °C), v_eg = 1.082 eV ≈ silicon, all three TCs interior**
 (session-15 record; the 4.15 % linear-TC and 4.78 % TC-off fits live on as
-script baselines/probes). Suite green, ruff clean — test totals drift with
-headless Tk skips, don't pin counts. Datasheet Figure 3 (typical output
-curves), the body-diode forward characteristics CSV, the IMCQ120R004M2H
+script baselines/probes). Official record on IMCQ120R004M2H (SiC):
+**`IMCQ120_JOINT` — joint multi-temperature fit, 1.93 % relative RMSE on 200
+points / 29 temperatures** (IV 25/175 °C + transfer 25/175/200 °C +
+Rds(on)-Tj + Vth-Tj; TC laws as the only extra unknowns; quadratic `r_d(T)`;
+see the session-21 section below and `out/IMCQ120_JOINT_FIT_REPORT.md`).
+Suite green, ruff clean — test totals drift with headless Tk skips, don't pin
+counts. Datasheet Figure 3 (typical output curves), the body-diode forward
+characteristics CSV, the IMCQ120R004M2H
 IV + Rds(on)/V_th-vs-T_j CSVs, and the three-part C–V + Qg CSVs are on disk
 in `data/`.
 
@@ -85,7 +106,9 @@ Projects/ImprovedVDMOS/
 │                           cli, __main__
 ├── tests/                  test_model, test_fit, test_package_r, test_gate_cap,
 │                           test_drain_softness, test_overdrive_gain, test_data
-│                           (CSV header contract), test_st8l65_official, test_diode,
+│                           (CSV header contract), test_st8l65_official,
+│                           test_imcq120_official (joint multi-T record),
+│                           test_diode,
 │                           test_caps (incl. live LTspice parity), test_cli,
 │                           test_digitizer
 ├── scripts/                fit_datasheet.py, fit_st8l65.py (legacy baseline),
@@ -93,13 +116,16 @@ Projects/ImprovedVDMOS/
 │                           fit_st8l65_diode.py (official diode recipe),
 │                           fit_imcq120_temperature.py + fit_imcq120_gain_probe.py
 │                           (SiC two-temperature protocol + k_beta_trap probe),
+│                           fit_imcq120_joint.py (session-21 joint multi-T fit,
+│                           TC laws + quadratic r_d(T) — PART 1 recipe),
 │                           fit_cmax.py (official c_gdmax extraction),
 │                           export_caps.py (LTspice subckt export),
 │                           roundtrip_demo.py
 ├── data/                   README.md + ST8L65N044M9_IV.csv (41 digitised points)
 │                           + ST8L65N044M9_diode.csv (30 pts, −55/25/150 °C)
 │                           + ST8L65N044M9_Id_Vds_Vgs.png (datasheet Figure 3)
-│                           + IMCQ120R004M2H IV ×2 + Rdson_Tj + Vth_Tj CSVs
+│                           + IMCQ120R004M2H IV ×2 + Transfer + Rdson_Tj +
+│                             Vth_Tj CSVs
 │                           + <part>_Cap_Vds.csv ×3 + <part>_Vgs_Qg.csv ×3
 └── notebooks/              README.md only (empty)
 ```
@@ -519,6 +545,104 @@ accepted spellings, real IMCQ CSVs (78/73 pts) and the ST8L65 official CSV
 (41 pts) load natively. `data/README.md` documents both contracts and the
 IMCQ IV datasets; the ST8L65 header description was corrected to the actual
 `index,Vds,Ids,Vgs` (it always loaded — matching is case-insensitive).
+
+## Joint multi-temperature fit — IMCQ120R004M2H (session 21) — HANDOVER PART 1 CLOSED
+
+One residual vector, 200 points / 29 temperatures: IV 25 °C (78) + IV 175 °C (73)
++ digitized transfer @ V_DS = 20 V, 25/175/200 °C (23, `data/IMCQ120R004M2H_Transfer.csv`)
++ Rds(on)-Tj chords @185.2 A, Vgs 15/18 (22) + Vth-Tj @58.3 mA (4). TC LAWS are the
+only extra unknowns (no more independent per-T fits). Script
+`scripts/fit_imcq120_joint.py`, report `out/IMCQ120_JOINT_FIT_REPORT.md`,
+log `out/_s21_joint_run.log`.
+
+User-directed protocol changes vs the HANDOVER spec:
+
+- **`r_d(T)` QUADRATIC in T(°C)** (Trs1/Trs2 law form), replacing the power law /
+  exponential of the temperature report. The digitized chords fit the quadratic to
+  **0.067 % / 0.065 % RMSE** over −46…196 °C (power law 9.5/9.1 %, exponential
+  5.9/6.3 %, linear 13.4/10.9 %) — the quadratic curvature IS the cold-end
+  flattening. Joint-fit Rds(on) check: **RMSE 0.66 %, max 1.08 %, cold end 0.70 %**
+  (was −15.3 % at −46 °C). The `rd_powerlaw` ablation degrades the series path 7×
+  (4.59 %, cold 6.98 %) — the user call is confirmed in the joint fit too.
+- **`k_theta` FREED** — lands at 0.109 1/V (v_knee → 9.2 V) and is the mechanism
+  that bends the high-v_gs transfer over. Ablation `no_ktheta`: overall RMSE
+  1.93 → 4.14 % (25 °C v_gs=8 curve 2.7 → 9.3 %).
+- **`k_lambda` re-freed — and the data says NO**: it lands at 4.4e−10, σ = inf;
+  the `no_klambda` ablation is identical. The HANDOVER hypothesis "bending the
+  transfer is what k_lambda does" is disconfirmed — knee saturation (k_theta) +
+  the package-r_d divider + the transfer data itself do it.
+
+Headline (primary basin, 7 starts, costs 3.7105–3.7327e−2): **overall RMSE
+1.93 %** (IV 1.73 / transfer 3.39 / Rds(on) 0.65 / Vth 2.06 %) — the session-18
+8.53/6.13 % floor is gone. High-v_gs corner v_gs=18 @20 V: 175 °C **2118 A**
+(digitized ~2070; the gain fit predicted 3650) — the "don't quote above 1500 A"
+gate is LIFTED. ZTC 25/175 at 14.92 V/1703 A (matches the digitized output-curve
+crossing ~14.9 V; the datasheet-figure ~14.2 V read stays +5 % off). Ron chords
+3.722/4.652 mΩ @25 °C (data 3.70/4.70). Vth spec 57.0/59.1 mA.
+
+TC laws (25 °C base): k_p25 9.318 A/V² with beta_p 0.378 (k_p ~ T^−β);
+v_th0 5.746 V with slope **−7.16 mV/K** (σ 0.5 %; datasheet −6.67; fitted offset
+≈ +1.5 V constant — never substitute the datasheet V_th); v_sub 0.7933 invariant;
+k_beta_trap 0.4687 with +3.40e−4 1/V/K (linear law; the Arrhenius variant ties at
+1.92 vs 1.93 % with Ea σ = inf → linear kept, "the joint fit decides"); r_d 2.3985 mΩ
+with a 6.727e−3 /K, b 5.367e−5 /K² (vertex ≈ −38 °C — law valid over the data span,
+not below); k_kneesharp 1.465; k_eta pinned at the 0.05 cap (σ inf), v_dbsat 320
+(σ inf), k_lambda ≈ 0 — the DIBL/CLM block is inert (bounds, not measurements).
+
+Identifiability doctrine CONFIRMED (HANDOVER 1.3): the `no_transfer` ablation
+(IV-only, same TC laws) fits IV *better* (1.59 %) but its r_d(T) TC is degenerate
+(a_rd σ_rel 295, corr(a_rd,b_rd) −1.00) and its OUT-OF-SAMPLE Rds(on)-Tj fails at
+20.2 % RMSE / 34.1 % cold — the chord data is what pins r_d(T); only then is
+beta_p interpretable. Composition gotchas on record: k_p25~k_bt25 −0.95 (the pair
+is a model-form split — the composite k_p·v_ov_eff2 is the record; quote curves,
+never the pair), beta_p~s_bkt +0.97 (the channel TC is shared). The gain
+derivative dv_ov_eff2/dv_ov_eff reaches **12.5 at v_gs=18** — legal for the
+package-R bracket only because r_s = 0; re-check before any r_s > 0 use of this
+record (Kelvin-aware subckt, queue 4).
+
+Open gaps from this fit (in the report): g_fs 129.5 S vs 122 spec (+6.2 %), the
+25 °C transfer corner −5…−7 % at v_gs 15–19 (r_d25 2.40 mΩ drops 7.2 V at 3 kA —
+the Kelvin source-side power path is the expected fix), ZTC 175/200 crossing
+12.97 V vs digitized 12.03 V (hot-curve separation).
+
+### Promotion to OFFICIAL (session 21, user go-ahead) — `IMCQ120_JOINT`
+
+The joint fit is now the quoted IMCQ120R004M2H channel model, single source of
+truth in `reference.py`:
+
+- **Record:** `IMCQ120_JOINT` — an `ImcqJointRecord` (25 °C base + TC-law
+  coefficients, `params_at(t_c)` builds the `Params`). First record that is not
+  a bare `Params`: the multi-T laws ARE the model, so the record carries them
+  (quadratic `r_d(T)`, linear-clamped `k_beta_trap(T)`, power-law `k_p(T)`,
+  linear `v_th0(T)`). `IMCQ120_JOINT_RMSE_REL = 0.0193` + per-group constants.
+- **Pinned test:** `tests/test_imcq120_official.py` (11 tests, ~1 s) evaluates
+  the RECORDED set against all four measured CSVs (no re-fit): overall +
+  per-group RMSE reproduction, full-span Rds(on) chords (max < 1.5 %, cold rmse
+  < 1.2 % — pins the −15.3 %-cold-end fix), Ron chords, the high-v_gs corner
+  (< 2400 A ceiling — regression guard against the old 3650 A gain-fit
+  overshoot), ZTC crossings incl. the digitized 175/200 crossing point (±2 %),
+  V_th spec, TC-law physical invariants (k_beta_trap ≥ 0, r_d > 0 over the
+  span, v_th0 slope, v_sub invariant), and the two KNOWN OPEN GAPS pinned as
+  tolerances (g_fs +6.2 %, 25 °C corner −7 %) so they cannot silently worsen
+  while the Kelvin-aware subckt is built.
+- **Drift check:** `scripts/fit_imcq120_joint.py` re-checks the record every
+  run — sensed-parameter drift only (session-19 lesson: unsensed directions
+  are solver-trajectory noise, scipy-version sensitive) + record-RMSE
+  re-evaluation through the script's own machinery (cross-checks the
+  `reference.py` `params_at` law implementation against the script's).
+- **Bound-pin exceptions documented in the record:** `k_eta` at the 0.05 cap,
+  `k_lambda` ≈ 0, `v_dbsat` σ = inf — the inert DIBL/CLM block; everything
+  that matters is interior (`r_d25 < 3.7 mΩ` chord guard asserted by the test).
+- **Legacy demoted:** `scripts/fit_imcq120_temperature.py` (per-T protocol) and
+  `scripts/fit_imcq120_gain_probe.py` (mechanism probe) stay as historical
+  baselines with supersession notes in their docstrings.
+- **Temperature report deleted (user direction):**
+  `out/IMCQ120_TEMPERATURE_REPORT.md` removed; its durable SiC findings
+  (cap inertness evidence, datasheet frame-truncation corrections, linear-r_d
+  −26 °C argument, v_th0 offset history, v_sub invariance, k_p-TC
+  model-form-dependence, the 4 suspect digitized points, digitized ZTC
+  crossing, Kelvin caveat) are carried in `out/IMCQ120_JOINT_FIT_REPORT.md`
+  §8 — that report is now the IMCQ document.
 
 ## Open problems
 

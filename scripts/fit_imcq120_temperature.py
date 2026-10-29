@@ -2,6 +2,14 @@
 static I-V at 25 C and 175 C and study the temperature dependence of the
 improved-VDMOS channel parameters.
 
+HISTORICAL BASELINE (session 18 protocol) -- SUPERSEDED as the device model:
+the OFFICIAL IMCQ record is the session-21 joint multi-temperature fit
+(scripts/fit_imcq120_joint.py, reference.py::IMCQ120_JOINT, report
+out/IMCQ120_JOINT_FIT_REPORT.md). The per-temperature report this script
+produced, out/IMCQ120_TEMPERATURE_REPORT.md, was deleted in session 21; its
+durable findings are carried in the joint report section 8. Kept as the
+cap-free / k_lambda = 0 per-T baseline and the r_d/k_p entanglement probe.
+
 Protocol (rev. 2 -- user-directed: gate cap FREED, k_lambda FIXED at 0):
 
   free  = k_p, v_th0, v_sub, r_d, k_kneesharp, k_eta, v_dbsat,
@@ -53,7 +61,8 @@ FIT-QUALITY LIMIT (rev. 2): the ~7-8.5 % floor is a MODEL-FORM limit, not a
   v_ov_eff = v_ov*(1 + k_beta*v_ov) -- the INVERSE of the charge cap -- halves
   the error (8.53 -> 4.61 %, 6.13 -> 3.31 %) and pins the Ron chords to 0.03 %.
 
-Key findings (see out/IMCQ120_TEMPERATURE_REPORT.md):
+Key findings (carried into out/IMCQ120_JOINT_FIT_REPORT.md section 8 -- the
+original out/IMCQ120_TEMPERATURE_REPORT.md was deleted session 21):
   * fitted v_th0 (6.61/5.65 V) is NOT the datasheet Vth (4.20/3.20 V): constant
     +2.4 V offset (SiC current-dependent apparent threshold bridged by the
     softplus), but the SLOPE matches: -6.42 vs -6.67 mV/K.

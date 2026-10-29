@@ -27,6 +27,8 @@ values are unchanged and still reproduce the published RMSE exactly.)
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .caps import CapParams, OriginAnchor
 from .params import Params
 
@@ -37,6 +39,11 @@ __all__ = [
     "ST8L65_DIODE",
     "ST8L65_DIODE_RMSE_REL",
     "ST8L65_DIODE_FREE",
+    "IMCQ120_JOINT",
+    "IMCQ120_JOINT_RMSE_REL",
+    "IMCQ120_JOINT_GROUP_RMSE_REL",
+    "IMCQ120_JOINT_FREE",
+    "ImcqJointRecord",
     "CAP_ST8L65",
     "CAP_IMCQ120",
     "CAP_ISC040",
@@ -126,6 +133,168 @@ ST8L65_DIODE = Params(
     t_nom=25.0,
     k_xti=3.0,
     v_eg=1.08196,
+)
+
+# ---------------------------------------------------------------------------
+# IMCQ120R004M2H (CoolSiC 1200 V, 4 mOhm class, Kelvin source) -- JOINT
+# multi-temperature channel record (session 21, user promotion).
+#
+# Protocol: scripts/fit_imcq120_joint.py -- ONE least-squares vector over
+# 200 points / 29 temperatures: IV 25 C (78) + IV 175 C (73)
+# + transfer @ V_DS = 20 V, 25/175/200 C (23, data/IMCQ120R004M2H_Transfer.csv)
+# + Rds(on)-Tj chords @185.2 A, Vgs 15/18 (22) + Vth-Tj @58.3 mA (4).
+# The TC LAWS below are the only extra unknowns -- no independent per-T fits.
+# Report: out/IMCQ120_JOINT_FIT_REPORT.md (the session-18 per-T report
+# out/IMCQ120_TEMPERATURE_REPORT.md was deleted in session 21; its durable
+# findings are carried in that report's section 8).
+#
+# TC laws (25 C base, evaluated by params_at):
+#   k_p(T)         = k_p25 * (T_K/298.15)^(-beta_p)
+#   v_th0(T)       = v_th0_25 + s_vth*(T - 25)          [-7.16 mV/K]
+#   v_sub          = const (measured invariant -- a shape knob, not a thermal
+#                    voltage; ln10*v_sub ~ 1.8 V/dec is a model floor)
+#   k_beta_trap(T) = max(k_bt25 + s_bkt*(T - 25), 0)    [linear; the Arrhenius
+#                    variant ties at 1.92 vs 1.93 % with Ea sigma = inf --
+#                    the joint fit decided: linear]
+#   r_d(T)         = r_d25*(1 + a_rd*(T-25) + b_rd*(T-25)^2)  [QUADRATIC,
+#                    Trs1/Trs2 law form -- user call, confirmed 7x over the
+#                    power law (chord fits: quad 0.067/0.065 % RMSE vs power
+#                    9.5/9.1 %, exp 5.9/6.3 %, linear 13.4/10.9 %). NEVER
+#                    linear (goes negative below -26 C); vertex ~ -38 C --
+#                    valid over the -46..200 C data span, not below.]
+#   k_theta, k_kneesharp, k_eta, v_dbsat, k_lambda: T-independent.
+# Fixed: r_s = 0 (Kelvin source), g_k = 0, v_ovmax = 0 (cap off -- not sensed
+# on this SiC part), v_vsat = 1e4 (off).
+#
+# QUOTE THE CURVES + TC LAWS, NEVER THE PARAMETER SPLIT:
+#  * k_p25 ~ k_bt25 corr -0.95 (9.32 / 0.469 vs the per-T gain-fit anchors
+#    25.74 / 0.057): the pair is a model-form split, the composite
+#    k_p(T)*v_ov_eff2(T) is the record. beta_p ~ s_bkt +0.97: the channel TC
+#    is shared between them. Same doctrine as the SJ cap<->gain record.
+#  * k_eta pinned at the 0.05 search cap (sigma inf), v_dbsat 320 (sigma inf),
+#    k_lambda ~ 4.4e-10 (sigma inf): the DIBL/CLM block is INERT on this
+#    device (k_db(20 V) ~ 0.06) -- bounds, not measurements. Re-freeing
+#    k_lambda (session-21 ablation) confirms CLM is unnecessary: knee
+#    saturation (k_theta = 0.109, v_knee -> 9.2 V) + the r_d divider + the
+#    transfer data carry the high-v_gs shape.
+#  * beta_p is interpretable ONLY because the Rds(on)-Tj chords pin r_d(T)
+#    inside the vector (IV-only ablation: a_rd sigma_rel 295, corr(a_rd,b_rd)
+#    -1.00, out-of-sample Rds(on) fails at 20 % RMSE / 34 % cold).
+#  * Gain derivative dv_ov_eff2/dv_ov_eff = 1 + 2*k_bt*v_ov reaches 12.5 at
+#    v_gs = 18 -- legal for the package-R bracket ONLY because r_s = 0
+#    (monotonicity, not <= 1, is what the proof needs). Re-check before any
+#    r_s > 0 use of this record (Kelvin-aware subckt, HANDOVER queue).
+#
+# Acceptance at promotion (independent specs, never fitted; full table in the
+# report): overall RMSE 1.93 % (IV 1.73 / transfer 3.39 / Rds(on) 0.65 /
+# Vth 2.06); high-v_gs corner v_gs=18 @20 V: 2118 A at 175 C vs ~2070
+# digitized (the old gain-fit overshoot was 3650 -- FIXED); Rds(on)-Tj full
+# -46..195 C span max err 1.08 % (was -15.3 % at -46 C -- FIXED); Ron chords
+# 3.722/4.652 mOhm @25 C (data 3.70/4.70); Vth spec 57.0/59.1 mA; ZTC 25/175
+# at 14.92 V/1703 A (matches the digitized output-curve crossing ~14.9 V).
+# KNOWN OPEN GAPS (pinned by tests/test_imcq120_official.py): g_fs 129.5 S vs
+# 122 spec (+6.2 %) and the 25 C transfer corner -5..-7 % at v_gs 15-19 --
+# both point at the unmodeled Kelvin source-side power path (r_d25 drops
+# 7.2 V at 3 kA), not at channel physics.
+#
+# tests/test_imcq120_official.py pins this record against all four measured
+# CSVs (record evaluation, no re-fit), so a model/bounds/law change that
+# silently moves the official fit fails the suite.
+# ---------------------------------------------------------------------------
+
+IMCQ120_JOINT_FREE: tuple[str, ...] = (
+    "k_p25", "beta_p", "v_th0_25", "s_vth", "v_sub", "k_bt25", "s_bkt",
+    "k_theta", "k_ksh", "k_eta", "v_dbsat", "k_lambda",
+    "r_d25", "a_rd", "b_rd",
+)
+
+# Relative RMSE on the 200-point joint set (relative weighting, same residual
+# definition as vdmos_fit.fit.residuals: (model - ref)/max(|ref|, 1e-3)).
+IMCQ120_JOINT_RMSE_REL = 0.0193
+IMCQ120_JOINT_GROUP_RMSE_REL = {
+    "iv": 0.017283,
+    "transfer": 0.033930,
+    "rdson": 0.006482,
+    "vth": 0.020617,
+}
+
+
+@dataclass(frozen=True)
+class ImcqJointRecord:
+    """25 C base parameters + TC laws; ``params_at(t_c)`` builds the Params.
+
+    Field names match the free-set names in scripts/fit_imcq120_joint.py
+    (k_ksh = k_kneesharp, k_bt25/s_bkt = k_beta_trap level/slope).
+    """
+
+    k_p25: float
+    beta_p: float
+    v_th0_25: float
+    s_vth: float
+    v_sub: float
+    k_bt25: float
+    s_bkt: float
+    k_theta: float
+    k_ksh: float
+    k_eta: float
+    v_dbsat: float
+    k_lambda: float
+    r_d25: float
+    a_rd: float
+    b_rd: float
+    # Fixed (not fitted) -- Kelvin source, no kink, cap off, v_vsat off.
+    r_s: float = 0.0
+    v_vsat: float = 1e4
+    g_k: float = 0.0
+    v_ovmax: float = 0.0
+
+    def params_at(self, t_c: float) -> Params:
+        """Full Params at temperature ``t_c`` [degC] through the record TC laws.
+
+        Must stay consistent with ``params_at`` in scripts/fit_imcq120_joint.py
+        (primary variant: quadratic r_d, linear clamped k_beta_trap); the
+        script re-evaluates this record's RMSE through its own machinery and
+        prints OK/STALE, and tests/test_imcq120_official.py evaluates the
+        record directly -- a divergence between the two fails loudly.
+        """
+        tk = t_c + 273.15
+        dt = t_c - 25.0
+        kbt = max(self.k_bt25 + self.s_bkt * dt, 0.0)
+        fac = 1.0 + self.a_rd * dt + self.b_rd * dt * dt
+        return Params(
+            k_p=self.k_p25 * (tk / 298.15) ** (-self.beta_p),
+            v_th0=self.v_th0_25 + self.s_vth * dt,
+            v_sub=self.v_sub,
+            k_beta_trap=kbt,
+            k_theta=self.k_theta,
+            v_vsat=self.v_vsat,
+            k_kneesharp=self.k_ksh,
+            k_eta=self.k_eta,
+            k_lambda=self.k_lambda,
+            g_k=self.g_k,
+            v_dbsat=self.v_dbsat,
+            r_d=self.r_d25 * max(fac, 1e-6),  # Trs1/Trs2 clamp precedent
+            r_s=self.r_s,
+            v_ovmax=self.v_ovmax,
+        )
+
+
+IMCQ120_JOINT = ImcqJointRecord(
+    k_p25=9.31762,
+    beta_p=0.377994,
+    v_th0_25=5.74578,
+    s_vth=-0.00716141,
+    v_sub=0.793309,
+    k_bt25=0.468722,
+    s_bkt=3.40378e-4,
+    k_theta=0.109044,
+    k_ksh=1.46481,
+    k_eta=0.0499999,      # pinned at the 0.05 search cap -- INERT, sigma inf
+    v_dbsat=319.838,      # sigma inf -- inert (k_db(20 V) ~ 0.06)
+    k_lambda=4.36994e-10,  # ~ 0: CLM unnecessary (sigma inf)
+    r_d25=0.00239852,
+    a_rd=0.00672705,
+    b_rd=5.36729e-5,
 )
 
 # ---------------------------------------------------------------------------

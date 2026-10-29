@@ -1,11 +1,19 @@
 """Probe (NOT part of the package model): what mechanism the IMCQ120R004M2H data
 actually wants, and how much it gains.
 
-Finding that motivated this script (see out/IMCQ120_TEMPERATURE_REPORT.md,
-"fit-quality limit"): the datasheet's own on-curves imply a channel conductance
-that grows SUPER-linearly with gate overdrive. Reading the first (near-origin,
-ohmic) point of each 25 C curve and subtracting the r_d drop gives the implied
-channel overdrive v_ov = g_ch / k_p:
+HISTORICAL PROBE (session 18) -- the gain it proposed landed in the package in
+session 19 (k_beta_trap) and the OFFICIAL IMCQ record is now the session-21
+joint fit (scripts/fit_imcq120_joint.py, reference.py::IMCQ120_JOINT). Kept as
+the standing demonstration of the super-linear implied-conductance diagnostic
+and the gain's effect size. The report it referenced,
+out/IMCQ120_TEMPERATURE_REPORT.md, was deleted session 21 (findings carried
+into out/IMCQ120_JOINT_FIT_REPORT.md section 8).
+
+Finding that motivated this script (see out/IMCQ120_JOINT_FIT_REPORT.md
+section 8 item 6, "fit-quality limit"): the datasheet's own on-curves imply a
+channel conductance that grows SUPER-linearly with gate overdrive. Reading the
+first (near-origin, ohmic) point of each 25 C curve and subtracting the r_d
+drop gives the implied channel overdrive v_ov = g_ch / k_p:
 
     v_gs      7      8     10     12     15     18
     v_ov    0.24   0.72   2.09   3.83   6.99  10.85  V
