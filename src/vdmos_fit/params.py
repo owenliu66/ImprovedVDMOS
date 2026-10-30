@@ -107,7 +107,25 @@ class Params:
                    chord (see README, "Package resistance (r_d, r_s)").
     r_s : float      Source series resistance [Ohm]. Also *degenerates* the
                    gate drive: the internal gate-source voltage is
-                   v_gs - r_s*i_d, so g_m,eff = g_m/(1 + r_s*g_m).
+                   v_gs - (r_s - r_sk)*i_d, so
+                   g_m,eff = g_m/(1 + (r_s - r_sk)*g_m).
+    r_sk : float     Kelvin source package resistance [Ohm] (names.xlsx
+                   "sk"): the resistance between the KELVIN source tap and
+                   the power source pin. The gate loop returns at the kelvin
+                   tap, so it sees only the channel-side segment
+                   r_s - r_sk; the FULL r_s stays in the current path
+                   ("r_s inside the current path but outside the gate
+                   loop"). r_sk = 0 -- no kelvin contact, the gate loop
+                   returns at the power source (the legacy r_s semantics,
+                   bit-identical). r_sk = r_s -- ideal kelvin tap at the
+                   die/source metal: the gate loop is NOT degenerated at
+                   all. Constraint 0 <= r_sk <= r_s (model.py raises
+                   ValueError otherwise); the kelvin pin carries no channel
+                   current in the DC model, so r_sk never appears in the
+                   current-loop sum r_d + r_s. Linear space (0 is the
+                   legitimate "no kelvin contact" value, r_d/r_s
+                   precedent); NOT in DEFAULT_FREE (freeing it silently
+                   changes existing fits).
 
     Body-diode parameters (LTspice diode DC branch; see diode.py and README,
     "Body diode"). Defaults are the OFF sentinel: i_s = i_sr = 0 makes the
@@ -173,6 +191,7 @@ class Params:
     v_kneemin: float = 1e-3
     r_d: float = 0.0
     r_s: float = 0.0
+    r_sk: float = 0.0
     # Body diode (all defaults = off sentinel; see diode.py docstring).
     i_s: float = 0.0
     k_n: float = 1.0
@@ -252,8 +271,13 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "v_kneemin": (1e-6, 1e-1),
     # Linear space (the physical answer can be exactly zero); 0.5 Ohm is a
     # loose global ceiling only -- per device cap at datasheet Rds(on).
+    # r_sk: linear space, 0 is the legitimate "no kelvin contact" value
+    # (r_d/r_s precedent). The physical constraint r_sk <= r_s is enforced
+    # by model.py (ValueError), not by the bound table -- a bound cannot
+    # reference another parameter.
     "r_d": (0.0, 0.5),
     "r_s": (0.0, 0.5),
+    "r_sk": (0.0, 0.5),
     # Body diode (LTspice D-model DC branch). i_s/i_sr lower bounds sit far
     # from the 0 sentinel so a free value can never mimic "off"; i_kf lower
     # bound 1e-3 A keeps a free i_kf away from the 0 sentinel ("off" = leave

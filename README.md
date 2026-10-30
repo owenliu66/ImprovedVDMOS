@@ -74,7 +74,7 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth: `names.xlsx`)
 |---|---|---|
 | `v_` | voltage [V] | `v_th0`, `v_th`, `v_ov`, `v_ov_eff`, `v_ov_eff2`, `v_ovmax`, `v_sub`, `v_knee`, `v_kneemin`, `v_dseff`, `v_vsat`, `v_dbsat`, `v_thk`, `v_kovsoft` |
 | `i_` | current [A] | `i_d` |
-| `r_` | resistance [Ω] | `r_d`, `r_s` |
+| `r_` | resistance [Ω] | `r_d`, `r_s`, `r_sk` |
 | `g_` | conductance [S] | `g_k` — trench-kink conductance, *not* transconductance |
 | `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_beta_trap`, `k_agd` |
 | `c_` | capacitance [F] | `c_gd`, `c_gs`, `c_ds`, `c_gd0`, `c_gdmax` (CAP_SPEC) |
@@ -227,18 +227,31 @@ Shockley-consistent, exactly what LTspice does); the softplus floor only
 dominates while the diode is off. Real high-voltage leakage still needs a
 dedicated element (BV/Ibv), not a fitted resistor.
 
-### Package resistance (r_d, r_s)
+### Package resistance (r_d, r_s, r_sk)
 
 `r_d`/`r_s` (bond wires, leadframe, DBC) are embedded **outside** the intrinsic
 channel, exactly as LTspice's Level-1 `Rd`/`Rs` model-card parameters do —
 `vdmos_id_level1()` takes the same kwargs for a fair A/B:
 
 ```
-v_ds' = v_ds - (r_d + r_s)·i_d      v_gs' = v_gs - r_s·i_d
+v_ds' = v_ds - (r_d + r_s)·i_d      current loop: ALL of i_d
+v_gs' = v_gs - (r_s - r_sk)·i_d     gate loop: returns at the KELVIN tap (r_sk = 0)
 i_d   = f_intrinsic(v_ds', v_gs')     (implicit; solved per data point)
 ```
 
 r_s is not a pure series drop: it **degenerates the gate** (gm_eff = gm/(1 + r_s·gm)).
+**Kelvin-aware split (`r_sk`, session 22):** parts with a kelvin source pin close
+the gate loop at the *kelvin tap*, not at the power source pin. `r_sk` is the
+resistance between the kelvin tap and the power source pin (the downstream
+segment of `r_s`, carrying only gate current — zero in the DC model), so the
+gate loop sees only `r_s − r_sk` while the FULL `r_s` stays in the current
+path: `r_sk = 0` is "no kelvin contact" (the legacy semantics above,
+bit-identical), `r_sk = r_s` is the ideal tap at the die (gate loop clean,
+gm_eff = gm). Guard: `0 ≤ r_sk ≤ r_s` (ValueError — the tap is a point ON the
+source path; a negative degeneration is not a passive network and breaks the
+bracket proof). Pinned by `tests/test_kelvin_split.py`. The DC data senses only
+`r_d + r_s` and `r_s − r_sk`; the `r_s`/`r_sk` split itself needs the 4-terminal
+subckt (AC gate current through `r_sk` — the whole point of a kelvin pin).
 The implicit equation is solved with bracketed safeguarded Newton, never
 fixed-point iteration — in the ohmic region the fixed-point contraction factor
 is (r_d+r_s)·k_p·v_ov ≈ 1.6 for DEFAULT, which diverges. The solver also carries a
@@ -365,7 +378,8 @@ IMCQ record). The package provides one C¹ continuous
 drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp,
 interface-trap-filling gain k_beta_trap, mobility
 degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
-package r_d/r_s, **plus the body diode** (LTspice diode DC branch with
+package r_d/r_s (with the Kelvin-aware `r_sk` gate-loop split, session 22),
+**plus the body diode** (LTspice diode DC branch with
 high-injection compression and the Xti/Eg temperature law, terminal-wired,
 bypassing r_d/r_s), plus bounded least-squares extraction with identifiability
 diagnostics (dead Jacobian columns report σ = inf; `on_bounds` scales with the
@@ -397,8 +411,9 @@ c_gd splice + c_gdmax extraction from Qg + LTspice nonlinear-cap export with
 live parity — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)).
 Suite green (test totals drift as headless Tk digitizer tests self-skip —
 don't pin counts). Remaining gaps: v_gs-dependent C_gd blend,
-full-device LTspice subckt (incl. the Kelvin-aware `r_s` split, now with
-quantitative targets from the IMCQ record), HV leakage, thermal node —
+full-device LTspice subckt (the Kelvin-aware `r_sk` split LANDED in the
+model, session 22 — the two open IMCQ DC gaps are NOT series-R topology;
+see `out/IMCQ120_KELVIN_SPLIT_REPORT.md`), HV leakage, thermal node —
 details and open problems in
 [`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
 
@@ -531,7 +546,7 @@ at 1.0 in float) and decays smoothly to zero below.
 
 - Bracket: `i_d ∈ [0, v_ds/(r_d + r_s)]` — the terminal resistance is never
   below r_d + r_s. `g(i_d) = f(·) − i_d` is strictly decreasing
-  (`dg/di_d = −(r_d+r_s)·∂f/∂v_ds − r_s·∂f/∂v_gs − 1 ≤ −1`) and `f(0, ·) = 0`
+  (`dg/di_d = −(r_d+r_s)·∂f/∂v_ds − (r_s−r_sk)·∂f/∂v_gs − 1 ≤ −1`) and `f(0, ·) = 0`
   exactly (every model term is gated by v_ds or tanh(v_ds/v_knee)), which also
   makes clamping the internal v_ds at 0 harmless when a trial point
   overshoots. Partial derivatives are central differences (the model is C1).

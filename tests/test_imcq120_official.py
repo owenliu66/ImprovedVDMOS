@@ -18,6 +18,11 @@ record), beta_p/s_bkt individually (+0.97), and the inert DIBL/CLM block
 The two KNOWN OPEN GAPS are pinned as tolerances so they cannot silently
 worsen while the Kelvin-aware subckt (queue) is being built: g_fs +6.2 % vs
 the 122 S spec, and the 25 C transfer corner -5..-7 % at v_gs 15-19.
+Session-22 experiment (out/IMCQ120_KELVIN_SPLIT_REPORT.md): neither gap is
+a series-R topology problem -- gate-loop degeneration (r_s inside the gate
+loop) is REJECTED by the data, the current-loop split is DC-degenerate, and
+the terminal g_fs is pinned by the transfer curve itself (~130 S). The
+tolerances below stay exactly as they were; only the explanation changed.
 """
 
 from __future__ import annotations
@@ -200,9 +205,10 @@ def test_high_vgs_corner_no_overshoot(joint):
     assert i175 < 2400.0, "high-v_gs corner overshot again (gain-fit was 3650 A)"
     assert i175 == pytest.approx(2070.0, rel=0.04)
     assert float(vdmos_id(20.0, 18.0, p200)) == pytest.approx(1836.0, rel=0.04)
-    # 25 C: chord-interpolated digitized value ~3213 A; the -7 % Kelvin-path
-    # deficit is a KNOWN open gap (queue: Kelvin-aware subckt) -- pin it so
-    # it cannot silently worsen.
+    # 25 C: chord-interpolated digitized value ~3213 A; the -7 % corner
+    # deficit is a KNOWN open gap -- a channel-shape compromise, NOT a
+    # series-R/Kelvin-path gap (session-22 experiment: gate degeneration
+    # makes it strictly worse) -- pin it so it cannot silently worsen.
     assert float(vdmos_id(20.0, 18.0, p25)) == pytest.approx(3213.0, rel=0.10)
 
 
@@ -234,8 +240,11 @@ def test_vth_spec_points(joint):
 
 def test_gfs_known_gap_pinned(joint):
     """g_fs @185.2 A / 20 V: 129.5 S vs the 122 S spec (+6.2 %). KNOWN open
-    gap (Kelvin source-side power path unmodeled, r_s = 0) -- pinned so it
-    cannot silently worsen while the Kelvin-aware subckt is being built."""
+    gap -- pinned so it cannot silently worsen. Session 22 showed the
+    terminal slope at this bias is pinned by the digitized transfer curve
+    itself (~130 S): no series-R topology (r_d/r_s/r_sk, degenerated or
+    not) can bring it to 122 without breaking the curve fit -- this is a
+    spec-vs-digitized-slope softness, not missing physics."""
     p = IMCQ120_JOINT.params_at(25.0)
     vg = brentq(lambda g: float(vdmos_id(20.0, g, p)) - I_TEST, 5.0, 18.0)
     h = 0.01

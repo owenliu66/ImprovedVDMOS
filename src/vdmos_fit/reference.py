@@ -163,8 +163,8 @@ ST8L65_DIODE = Params(
 #                    linear (goes negative below -26 C); vertex ~ -38 C --
 #                    valid over the -46..200 C data span, not below.]
 #   k_theta, k_kneesharp, k_eta, v_dbsat, k_lambda: T-independent.
-# Fixed: r_s = 0 (Kelvin source), g_k = 0, v_ovmax = 0 (cap off -- not sensed
-# on this SiC part), v_vsat = 1e4 (off).
+# Fixed: r_s = 0 (Kelvin source), r_sk = 0, g_k = 0, v_ovmax = 0 (cap off --
+# not sensed on this SiC part), v_vsat = 1e4 (off).
 #
 # QUOTE THE CURVES + TC LAWS, NEVER THE PARAMETER SPLIT:
 #  * k_p25 ~ k_bt25 corr -0.95 (9.32 / 0.469 vs the per-T gain-fit anchors
@@ -182,8 +182,9 @@ ST8L65_DIODE = Params(
 #    -1.00, out-of-sample Rds(on) fails at 20 % RMSE / 34 % cold).
 #  * Gain derivative dv_ov_eff2/dv_ov_eff = 1 + 2*k_bt*v_ov reaches 12.5 at
 #    v_gs = 18 -- legal for the package-R bracket ONLY because r_s = 0
-#    (monotonicity, not <= 1, is what the proof needs). Re-check before any
-#    r_s > 0 use of this record (Kelvin-aware subckt, HANDOVER queue).
+#    (monotonicity, not <= 1, is what the proof needs). RE-CHECKED session
+#    22 with r_g > 0 AND the gain active: the bracket survives (monotonicity
+#    is all the proof needs) -- tests/test_kelvin_split.py.
 #
 # Acceptance at promotion (independent specs, never fitted; full table in the
 # report): overall RMSE 1.93 % (IV 1.73 / transfer 3.39 / Rds(on) 0.65 /
@@ -193,9 +194,17 @@ ST8L65_DIODE = Params(
 # 3.722/4.652 mOhm @25 C (data 3.70/4.70); Vth spec 57.0/59.1 mA; ZTC 25/175
 # at 14.92 V/1703 A (matches the digitized output-curve crossing ~14.9 V).
 # KNOWN OPEN GAPS (pinned by tests/test_imcq120_official.py): g_fs 129.5 S vs
-# 122 spec (+6.2 %) and the 25 C transfer corner -5..-7 % at v_gs 15-19 --
-# both point at the unmodeled Kelvin source-side power path (r_d25 drops
-# 7.2 V at 3 kA), not at channel physics.
+# 122 spec (+6.2 %) and the 25 C transfer corner -5..-7 % at v_gs 15-19.
+# SESSION-22 UPDATE (out/IMCQ120_KELVIN_SPLIT_REPORT.md): the Kelvin-aware
+# r_s split (model.py r_sk) was implemented and the joint vector refit --
+# NEITHER gap is a series-R topology problem. Gate-loop degeneration is
+# REJECTED by the data (r_s -> 0 boundary optimum from every start; forcing
+# r_g = 0.25/0.5/1.0 mO monotonically worsens RMSE 1.93 -> 2.71 % AND g_fs);
+# the current-loop split is DC-degenerate (only r_d + r_s sensed, corr -1.00).
+# g_fs is pinned by the transfer curve itself (~130 S local slope at 185 A --
+# spec-vs-digitized-slope softness); the corner is a channel-shape
+# compromise. r_sk stays in the model for the 4-terminal SUBCKT (AC gate
+# current through r_sk); the DC record keeps r_s = r_sk = 0.
 #
 # tests/test_imcq120_official.py pins this record against all four measured
 # CSVs (record evaluation, no re-fit), so a model/bounds/law change that
@@ -243,7 +252,10 @@ class ImcqJointRecord:
     a_rd: float
     b_rd: float
     # Fixed (not fitted) -- Kelvin source, no kink, cap off, v_vsat off.
+    # r_sk (kelvin tap segment, session 22) is inert in the DC model at
+    # r_s = 0; it exists for the 4-terminal subckt (AC gate current).
     r_s: float = 0.0
+    r_sk: float = 0.0
     v_vsat: float = 1e4
     g_k: float = 0.0
     v_ovmax: float = 0.0
@@ -275,6 +287,7 @@ class ImcqJointRecord:
             v_dbsat=self.v_dbsat,
             r_d=self.r_d25 * max(fac, 1e-6),  # Trs1/Trs2 clamp precedent
             r_s=self.r_s,
+            r_sk=self.r_sk,
             v_ovmax=self.v_ovmax,
         )
 

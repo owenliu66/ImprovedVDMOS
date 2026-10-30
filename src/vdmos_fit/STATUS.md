@@ -1,6 +1,19 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-25 (session 21 — HANDOVER PART 1 CLOSED and PROMOTED: the
+*Snapshot: 2026-10-29 (session 22 — KELVIN-AWARE r_s SPLIT LANDED + queue
+item 2 CLOSED BY EXPERIMENT: `Params.r_sk` (names.xlsx "sk") gives the
+Kelvin-aware package-R split `v_gs' = v_gs − (r_s − r_sk)·i_d` (gate loop
+returns at the kelvin tap; full `r_s` stays in the current path; guard
+`0 ≤ r_sk ≤ r_s`; `r_sk = 0` bit-identical legacy), pinned by
+`tests/test_kelvin_split.py`; the joint-vector refit
+(`scripts/fit_imcq120_kelvin.py` + `fit_imcq120_kelvin_probe.py`, report
+`out/IMCQ120_KELVIN_SPLIT_REPORT.md`) shows the two open IMCQ gaps are NOT
+series-R topology problems: gate-loop degeneration is REJECTED by the data
+(`r_s → 0` boundary optimum from every start; forced `r_g` worsens RMSE
+1.93 → 2.71 % AND g_fs), the current-loop split is DC-degenerate (only
+`r_d + r_s` sensed), and terminal g_fs is pinned by the transfer curve
+itself (~130 S). Record UNCHANGED. Before that: session 21 closed HANDOVER
+PART 1 and PROMOTED the
 IMCQ120R004M2H transfer characteristic (V_DS = 20 V, 25/175/200 °C) was
 digitized and a JOINT multi-temperature fit (both IV sets + transfer +
 Rds(on)-Tj + Vth-Tj, TC laws as the only extra unknowns) landed as
@@ -21,7 +34,11 @@ Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Twenty-one sessions, committed to `main` (session 21 closed HANDOVER PART 1:
+Twenty-two sessions, committed to `main` (session 22 landed the Kelvin-aware
+`r_sk` package-R split and closed HANDOVER queue item 2 by experiment — the
+IMCQ joint vector refit rejects gate-loop degeneration and proves the
+current-loop split DC-degenerate (session-22 section below); session 21
+closed HANDOVER PART 1:
 the IMCQ120R004M2H joint multi-temperature fit — transfer-curve digitization +
 one residual vector over IV/transfer/Rds(on)-Tj/Vth-Tj with TC laws as the only
 extra unknowns, quadratic `r_d(T)` and freed `k_theta` per user direction,
@@ -66,7 +83,9 @@ interface-trap-filling gain (k_beta_trap) on v_ov_eff2, mobility degradation via
 velocity saturation, bounded DIBL, gated CLM,
 one-sided trench kink — embedded with package series resistance r_d/r_s (implicit
 external-node solve with a Newton stall guard, LTspice Rd/Rs semantics,
-channel v_ds ≥ 0 only; reverse polarity is carried by the body diode), plus bounded least-squares extraction with identifiability
+channel v_ds ≥ 0 only; reverse polarity is carried by the body diode) with the
+Kelvin-aware gate-loop split r_g = r_s − r_sk (session 22,
+`tests/test_kelvin_split.py`), plus bounded least-squares extraction with identifiability
 diagnostics. Along the way the project's Level-1 reference was corrected (knee
 at `v_ov/mtriode`, verified against LTspice 26.0.1 — the earlier NDR/continuity
 alarms were a bug in that reference, not in Level-1), and two mechanisms were
@@ -643,6 +662,62 @@ truth in `reference.py`:
   model-form-dependence, the 4 suspect digitized points, digitized ZTC
   crossing, Kelvin caveat) are carried in `out/IMCQ120_JOINT_FIT_REPORT.md`
   §8 — that report is now the IMCQ document.
+
+## Kelvin-aware r_s split — IMCQ120R004M2H (session 22) — queue item 2 CLOSED
+
+**Model support landed + experiment done; the record is UNCHANGED.**
+`Params.r_sk` (names.xlsx "sk", linear space, bounds (0, 0.5), not in
+DEFAULT_FREE) implements the asymmetric split the queue asked for:
+
+```
+v_ds' = v_ds − (r_d + r_s)·i_d      current loop: ALL of i_d
+v_gs' = v_gs − (r_s − r_sk)·i_d     gate loop: returns at the KELVIN tap
+```
+
+`r_sk` = resistance between the kelvin tap and the power source pin (the
+downstream segment of `r_s`, carrying only gate current — zero in the DC
+model). `r_sk = 0`: no kelvin contact, legacy semantics (bit-identical,
+pinned); `r_sk = r_s`: ideal tap at the die, gate loop clean. Guard
+`0 ≤ r_sk ≤ r_s` raises ValueError (negative degeneration is not a passive
+network and kills the bracket proof). The solver takes the gate-loop
+coefficient `r_g` explicitly; the HANDOVER "re-check before r_s > 0" note is
+DONE: the bracket survives with `r_g > 0` AND the trap-filling gain active
+(gate derivative ~12.5) — monotonicity is all the proof needs. Pinned by
+`tests/test_kelvin_split.py` (9 tests: identity, ideal-kelvin equivalence,
+brentq cross-checks, r_sk-monotone current lift, guards, fitting space).
+
+**The experiment** (`scripts/fit_imcq120_kelvin.py`, same 200-pt joint
+vector/TC laws/acceptance as the official fit; starts from the record
+optimum; log `out/_s22_kelvin_run.log`, report
+`out/IMCQ120_KELVIN_SPLIT_REPORT.md`):
+
+| variant | landed | RMSE % | g_fs S | corner25 A |
+|---|---|---|---|---|
+| control (record) | — | 1.93 (drift 4e-6 OK) | 129.5 | 2990 |
+| kelvin_ideal (r_sk = r_s, gate clean) | r_s25 σ_rel 75, corr(r_d25,r_s25) −1.00, r_tot25 invariant | 1.93 (identical) | 129.5 | 2990 |
+| degenerated (r_sk = 0, degeneration = r_s) | **r_s25 → 0 pinned LOWER** (3 starts) | 1.93 | 129.5 | 2990 |
+| split_free (r_s25, f_sk = r_sk/r_s) | r_s25 → 0 pinned; f_sk σ inf | 1.93 | 129.5 | 2990 |
+
+Forced-degeneration probe (`fit_imcq120_kelvin_probe.py`): r_g = 0.25/0.5/1.0
+mΩ monotonically WORSENS RMSE (1.93 → 2.11 → 2.28 → 2.71 %), deepens the
+corner deficit (−6.2 → −10 %) and does NOT lower g_fs (the channel re-tunes
+to re-pass through the same transfer curve).
+
+**Verdicts (on record):**
+- The current-loop split is DC-invisible (only `r_d + r_s` and the total TC
+  are sensed) — the doctrine's −0.999/±1.00 correlation result, proven.
+- Gate-loop degeneration ("the datasheet static measurement did not use the
+  kelvin pin") is REJECTED by the data: boundary optimum r_g = 0 from every
+  start; the corner needs MORE channel drive, degeneration removes it.
+- g_fs +6.2 % is a spec-vs-digitized-slope softness: the transfer curve
+  itself pins the terminal slope at 185 A to ~130 S; no series-R topology
+  can move it without breaking the curve fit.
+- The 25 °C corner −6 % is a channel-shape compromise (k_p25~k_bt25~k_theta
+  squeezed by the hot curves + chords), NOT a series-path gap.
+- `r_sk` stays in the model for the 4-terminal SUBCKT (queue 3): the kelvin
+  pin carries only gate CURRENT — it matters during switching (Miller /
+  displacement current through r_sk), which is exactly the full-device
+  subckt. DC record keeps r_s = r_sk = 0.
 
 ## Open problems
 
