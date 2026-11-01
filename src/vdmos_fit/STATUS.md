@@ -1,6 +1,18 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-29 (session 22 — KELVIN-AWARE r_s SPLIT LANDED + queue
+*Snapshot: 2026-10-30 (session 23 — BODY-DIODE RECOVERY INTEGRATED + FITTED
+(ISC040N10NM8, LTspice-side only, NO package code touched): the user's
+behavioral `DiodeRecov` network (charge-storage node q_j, charge-controlled
+B2 reverse-recovery source, B3 forward-recovery resistor) is now part of the
+full-device subckt template `out/ISC040N10NM8_recov.subckt` — the measured
+C_ds charge-master relocated INSIDE the recovery branch at Ki–A (D–S
+placement crashes hard forward re-turn-on; Ki–Ai is singular), B3 +1 µΩ
+floor and R2 = 1 µΩ break near-singular bridge loops (<0.1 % waveform
+impact), `method=gear reltol=1e-4` required; two-knob fit **q_0 = 35 n,
+tau = 5** hits the datasheet 1000 A/µs recovery (Qrr 249.6 vs typ 247 nC,
+t_rr 27.6 vs 25 ns); report `out/RECOV_REPORT.md`; **NEXT SESSION: q_0/tau
+extraction protocol from datasheet info**. Before that, session 22
+(2026-10-29): KELVIN-AWARE r_s SPLIT LANDED + queue
 item 2 CLOSED BY EXPERIMENT: `Params.r_sk` (names.xlsx "sk") gives the
 Kelvin-aware package-R split `v_gs' = v_gs − (r_s − r_sk)·i_d` (gate loop
 returns at the kelvin tap; full `r_s` stays in the current path; guard
@@ -34,7 +46,10 @@ Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Twenty-two sessions, committed to `main` (session 22 landed the Kelvin-aware
+Twenty-three sessions, committed to `main` (session 23 integrated + fitted
+the body-diode recovery network for ISC040N10NM8 — LTspice-side only, no
+package code touched; template `out/ISC040N10NM8_recov.subckt`, report
+`out/RECOV_REPORT.md`, session-23 section below; session 22 landed the Kelvin-aware
 `r_sk` package-R split and closed HANDOVER queue item 2 by experiment — the
 IMCQ joint vector refit rejects gate-loop degeneration and proves the
 current-loop split DC-degenerate (session-22 section below); session 21
@@ -719,6 +734,77 @@ to re-pass through the same transfer curve).
   displacement current through r_sk), which is exactly the full-device
   subckt. DC record keeps r_s = r_sk = 0.
 
+## Body-diode recovery network — ISC040N10NM8 (session 23) — integrated + fitted, LTspice-side only
+
+The user's behavioral recovery model (`DiodeRecov` subckt; benches in the
+Strata workspace `outputs/vdmos_recov/`) is integrated into the full-device
+subckt template `out/ISC040N10NM8_recov.subckt` (report:
+`out/RECOV_REPORT.md`). **No package Python touched** — recovery lives in
+the LTspice export layer.
+
+Network: D1 (diode DC branch, `Rs` externalized to R1 = 5 mΩ) in parallel
+with B2 (charge-controlled reverse current `V(q_j)·(V(Ki)−V(Ai))/tau`) and
+the forward-recovery path R1 + B3 (`V = −I(R2)·(r_max/(1+k_chg·V(q_j)) + 1µ)`);
+the storage node q_j = C1 (`q_0/tau` farads to ground) fed by B1 (`−I(R2)/tau`)
+and clamped ≥ 0 by ClampD (`Roff=tau`).
+
+**Decoded semantics (simulation-verified — the model is more physical than it
+looks):**
+- ClampD `Roff=tau` closes the storage loop: forward steady state
+  **V(q_j) = I_F volts, tau-independent** (verified 12.5 V at 12.5 A); q_j
+  time constant = Roff·C1 = **q_0** (35 ns at q_0 = 35 n — the 1 Ω
+  normalization makes the user's "stored charge at 1 A" and "carrier
+  lifetime" readings the same number); stored charge = C1·I_F = q_0·I_F/tau
+  ∝ I_F — quasi-steady, not an unbounded integrator.
+- The −I_RM plateau is carried by **B2, not D1** (I(D1) ~ −1 nA during the
+  plateau); B2 is a charge-controlled conductance g = V(q_j)/tau; the plateau
+  ends when C1 (drained at I_rec/tau by B1) can no longer sustain g·V = I_RM:
+  snap at V(q_j) ≈ I_RM·tau/V_R = 1.25 V predicted, 1.33 V observed.
+- **q_0 sets timing (Qrr, t_rr ≈ linear in q_0); tau sets shape**
+  (plateau→tail departure, snap hardness; Qrr nearly tau-independent).
+
+**Fit (bench = user's DiodeTest: 500 settled periods, ±12.5 A PULSE current
+source, di/dt = 1000 A/µs, 50 µF/8 Ω self-biased V_R ≈ 49.3 V; k_chg = 5,
+r_max = 0.1 fixed; datasheet typ @1000 A/µs: t_rr 25 ns, Qrr 247 nC):**
+
+| variant | q_0 | tau | Qrr [nC] | t_rr(25 % I_RM) [ns] |
+|---|---|---|---|---|
+| **recommended** | **35 n** | **5** | **249.6 (+1.1 %)** | 27.6 (+10 %) |
+| datasheet-strict | 34 n | 3 | ≈248 | ≈26.8 |
+| waveform-image-strict | 37 n | 5 | 266 | 29.0 |
+
+No (q_0, tau) hits both targets: at Qrr = 247 the t_rr floor is ≈26 ns. At
+di/dt = 100 A/µs the fit gives Qrr 77 nC vs datasheet 36 — the datasheet's
+Qrr *rises* with di/dt (36 → 247 nC), unreproducible by any single
+stored-charge state (those low-di/dt numbers are "defined by design"); the
+model is tuned to the hard-switching (1000 A/µs) condition. **Next session:
+q_0/tau extraction protocol from datasheet info** (t_rr/Qrr/I_RM pairs,
+di/dt scaling, two-knob limitation quantified first; candidate extra knobs
+only if the residual demands them).
+
+**Integration decisions (all simulation-verified, LTspice 26.0.1):**
+- Caps delta exports **Cgs/Cgd only**; the measured C_ds charge-master
+  (Cds branch of `out/ISC040N10NM8_caps.subckt`, ramp-sum inline in the
+  template) moves **inside the recovery branch at Ki–A**. At the D–S
+  terminals: convergence failure at hard forward re-turn-on (D1 has no Cjo;
+  B3+R1 isolate the branch — timestep 1.25e-19 crash). At Ki–Ai: singular
+  (user's original finding, reproduced). Ki–A is electrically D–S (B3 is a
+  voltage source; R1 5 mΩ + R2 1 µΩ → fc ≈ 3 GHz) so the caps Δ stays
+  complete. The 500 p placeholder was a good approximation: q_ds(50 V) =
+  27 nC ⇒ avg C(0→50 V) = 541 pF; with the real Cds, Qrr moves <1 %.
+- **Half-bridge stability (user fix, adopted as template default):**
+  `R2 = 1 µΩ` (was 1 nΩ) and B3 carries a **+1 µΩ floor**:
+  `V=-I(R2)*(r_max/(1+k_chg*V(q_j))+1u)`. In a bridge, B3 (transimpedance
+  source) + R1/R2 + switch Ron + the opposite device form near-singular
+  loops. A/B over r2 × floor: waveform identity < 0.1 % (t_rr 30.369 →
+  30.382 ns, Qrr 248.55 → 248.73 nC, V_SD +12 µV @ 12.5 A).
+- `method=gear reltol=1e-4` required (trapezoidal rings on the snap).
+- Bench gotcha: `.tran` Tstart shifts the raw/meas time axis to 0 — `.meas
+  TD` must be relative (TD=0 happened to work in the original bench).
+- Forward recovery: B3 = 0.1 Ω cold → 1.6 mΩ hot (V(q_j) = I_F), τ_decay = q_0.
+- DC diode params Is=1n N=1.4 Rs=5m → V_SD(25 A) = 0.91 V (datasheet typ
+  0.82, max 1.0; Is ≈ 2.5 n would hit typ; q_0/tau insensitive).
+
 ## Open problems
 
 1. **k_lambda / v_dbsat unsensed (σ = inf) in the official fit** — *accepted, not a
@@ -762,8 +848,13 @@ to re-pass through the same transfer curve).
 - **Third-quadrant channel conduction** — channel is 0 for v_ds ≤ 0; a
   synchronous rectifier needs `sign(v_ds)·i_d(|v_ds|, v_gs)` (Queue item,
   out of scope session 12).
-- **Body-diode Qrr / capacitance** (Cjo/Vj/M, Tt) — static diode I–V is in;
-  recovery and junction charge are not.
+- **Body-diode recovery — package-side state not built**: recovery now
+  exists as the behavioral LTspice network (session 23: `DiodeRecov`,
+  ISC040-fitted q_0/tau, template `out/ISC040N10NM8_recov.subckt`, report
+  `out/RECOV_REPORT.md`); junction charge is covered by the caps delta (the
+  Cds branch relocates into the recovery branch). Open: datasheet-driven
+  q_0/tau extraction protocol (**next session**), other parts, T_j
+  dependence, and whether it earns a `diode.py`/`reference.py` counterpart.
 - **Q(V) charge model** — design settled AND LANDED 2026-10-18/21
   (Phases 1–4): see [`CAP_SPEC.md`](CAP_SPEC.md). `caps.py` builds
   charge-master LUTs

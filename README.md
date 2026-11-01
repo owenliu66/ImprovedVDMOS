@@ -2,11 +2,17 @@
 
 A compact power-MOSFET model that replaces the built-in LTspice Level-1 VDMOS
 two-branch (triode/saturation) drain current with **one C¹ continuous
-expression**, plus least-squares parameter extraction from static I-V data.
+expression**, plus least-squares parameter extraction from static I-V data,
+an LTspice-exact body-diode DC branch, a charge-master capacitance model, and
+a behavioral body-diode recovery network for LTspice export.
+
+Session history, official fitted records, and open problems live in
+[`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md) and
+[`HANDOVER.md`](HANDOVER.md). This file is the model reference.
 
 ## Why
 
-LTspice's VDMOS model:
+LTspice's Level-1 VDMOS ties everything together through one shape knob:
 
 | mtriode | knee = v_ov/m | Ron conductance = m·Kp·v_ov | i_d,sat |
 |---|---|---|---|
@@ -14,19 +20,11 @@ LTspice's VDMOS model:
 | 2 | 1.0 V | 8.00 S | 4.000 A |
 | 4 | 0.5 V | 16.0 S | 4.000 A |
 
-So **mtriode is a shape knob only**: it moves the knee and Ron together, and can
-never change i_d,sat = ½·Kp·Vov². Consequences:
-
-- **Ron, knee shape and saturation level are not independently settable.** Fitting
-  Rds(on) forces Ron, which forces the knee, which forces i_d,sat. At matched Ron the
-  square law then over-predicts saturation current by **4.3× at v_gs = 10 V rising to
-  5.3× at v_gs = 12 V** (v_ds = 20 V) — the regime that matters for buck/bridge inrush.
-  Re-measured against the corrected reference: Level-1's defaults (Kp = 28,
-  mtriode = 1.2, λ = 0.02) already match the improved model's Ron within 0.15% over
-  v_gs = 10–12 V, and the ratio is *unchanged* by the knee correction because at
-  v_ds = 20 V both the old and corrected formulas evaluate the same saturation
-  branch ½·Kp·Vov²(1+λVds). Pinned by
-  `tests/test_model.py::test_matched_ron_square_law_overprediction`.
+- **Ron, knee shape and saturation level are not independently settable**:
+  fitting Rds(on) forces Ron, which forces the knee, which forces
+  $i_{d,sat} = \tfrac{1}{2}K_p V_{ov}^2$ — the square law then over-predicts
+  saturation current by 4.3–5.3× over v_gs = 10–12 V at v_ds = 20 V, the
+  regime that matters for buck/bridge inrush.
 - **The saturation exponent is locked at α = 2.00.** Real power devices sit at
   α ≈ 1.2–1.6 because of drift-velocity saturation.
 - **No subthreshold conduction, no mobility degradation, no DIBL, no kink, no
@@ -34,41 +32,333 @@ never change i_d,sat = ½·Kp·Vov². Consequences:
 
 | Quantity | Level-1 | Improved |
 |---|---|---|
-| C1 continuity at knee | yes (by construction) | yes |
-| i_d,sat ∝ v_ov^α | α = 2.00, fixed | α = 1.08 at DEFAULT (v_gs 6–12 V); tunable across 1.2–1.6 with v_vsat ≈ 3–12 V, k_theta secondary |
+| C¹ continuity at knee | yes (by construction) | yes |
+| i_d,sat ∝ v_ov^α | α = 2.00, fixed | α tunable (see below) |
 | Ron vs i_d,sat coupling | locked together | independent |
-| Subthreshold | none (i_d = 0 below Vto) | smooth softplus, slope → 1/v_sub |
-| Off-state slope | undefined | softplus subthreshold floor, gate-dependent |
+| Subthreshold | none (i_d = 0 below Vto) | smooth softplus |
+| Off-state slope | undefined | gate-dependent softplus floor |
 | Trench kink | none | one-sided sigmoid |
-| Gate-charge saturation (α collapse at high v_gs) | none | soft cap `v_ovmax`, `k_ovsharp` (off by default) |
-| Interface-trap-filling gain (α rise at high v_gs, WBG) | none | gain `k_beta_trap` on `v_ov_eff2` (off by default) |
-| Knee width vs knee position | locked (mtriode moves both) | independent shape knob `k_kneesharp` (off by default) |
+| Gate-charge saturation (SJ parts) | none | soft cap `v_ovmax`, `k_ovsharp` |
+| Interface-trap-filling gain (WBG) | none | gain `k_beta_trap` |
+| Knee width vs knee position | locked (mtriode moves both) | independent knob `k_kneesharp` |
 
-## Model
+`vdmos_id_level1()` implements Level-1 **as actually implemented** (knee at
+$v_{ov}/m_{tri}$, verified against LTspice 26.0.1 `.meas`) with the same
+package-R embedding, for a fair A/B.
+
+## Channel model
+
+One C¹ continuous expression for the intrinsic drain current
+($v_{gs}, v_{ds}$ source-referenced; all names are code identifiers, Greek
+parameters carry the `k_` prefix):
+
+$$
+i_d = k_p\, v_{ov}^{eff2}\,
+\frac{v_{dseff} - \dfrac{v_{dseff}^2}{2\,v_{knee}}}{1 + \dfrac{v_{dseff}}{v_{vsat}}}
+\bigl(1 + k_\lambda\, v_{ds}\, k_{db}\bigr)
+\;+\; g_k\, v_{ds}\, k_{kink}\, k_{db}
+$$
+
+built from the chain
+
+$$
+k_{db} = \tanh\!\left(\frac{v_{ds}}{v_{dbsat}}\right)
+\qquad\text{(drain-bias factor: 0 ohmic, ~1 above the knee)}
+$$
+
+$$
+v_{th} = v_{th0} - k_\eta\, v_{ds}\, k_{db}
+\qquad\text{(DIBL, bounded)}
+$$
+
+$$
+v_{ov} = v_{sub}\,\ln\!\Bigl(1 + e^{(v_{gs} - v_{th})/v_{sub}}\Bigr)
+\qquad\text{(softplus: subthreshold → strong inversion)}
+$$
+
+$$
+v_{ov}^{eff} = \frac{v_{ov}}{\Bigl[1 + \bigl(v_{ov}/v_{ovmax}\bigr)^{k_{ovsharp}}\Bigr]^{1/k_{ovsharp}}}
+\qquad\text{(soft gate-charge cap, } v_{ovmax}=0 \Rightarrow \text{identity)}
+$$
+
+$$
+v_{ov}^{eff2} = v_{ov}^{eff}\,\bigl(1 + k_{\beta\text{-trap}}\, v_{ov}^{eff}\bigr)
+\qquad\text{(interface-trap-filling gain, off at } k_{\beta\text{-trap}}=0)
+$$
+
+$$
+v_{knee} = \max\!\left(\frac{v_{ov}^{eff2}}{1 + k_\theta\, v_{ov}^{eff2}},\; v_{kneemin}\right)
+\qquad\text{(vertical-field mobility degradation)}
+$$
+
+$$
+v_{dseff} =
+\begin{cases}
+v_{knee}\,\tanh\!\bigl(v_{ds}/v_{knee}\bigr) & k_{kneesharp}=0 \text{ (default)}\\[6pt]
+\dfrac{v_{ds}}{\Bigl[1 + \bigl(v_{ds}/v_{knee}\bigr)^{k_{kneesharp}}\Bigr]^{1/k_{kneesharp}}} & \text{power-law soft-min}
+\end{cases}
+$$
+
+$$
+k_{kink} = \tfrac{1}{2}\Bigl[1 + \tanh\!\Bigl(\frac{v_{gs} - v_{thk}}{v_{kovsoft}}\Bigr)\Bigr]
+\qquad\text{(one-sided trench-kink gate)}
+$$
+
+### Limits and the saturation exponent
+
+For $v_{ds} \ll v_{knee}$: $i_d \to k_p\, v_{ov}^{eff2}\, v_{ds}$ (ohmic; the
+Ron conductance is $k_p v_{ov}^{eff2}$, independent of any knee knob).
+For $v_{ds} \gg v_{knee}$: $v_{dseff} \to v_{knee}$ and
+
+$$
+i_{d,sat} = \frac{k_p\, v_{ov}^{eff2}\, v_{knee}}{2\,\bigl(1 + v_{knee}/v_{vsat}\bigr)}\,\bigl(1 + k_\lambda v_{ds}\bigr)
+$$
+
+With $v_{vsat} \to \infty$ the gate exponent is
+$\alpha \equiv \partial \ln i_{d,sat}/\partial \ln v_{ov}^{eff2}
+= 1 + \bigl(1 + k_\theta v_{ov}^{eff2}\bigr)^{-1} \in (1, 2]$:
+$k_\theta = 0$ recovers the square law, large $k_\theta$ approaches
+$\alpha \to 1$. Velocity saturation ($v_{vsat}$) lowers α further; the
+DEFAULT set gives α = 1.08 over v_gs = 6–12 V, and α ≈ 1.2–1.6 — the physical
+WBG/SJ regime — is reachable with $v_{vsat} \approx 3\text{–}12$ V
+($k_\theta$ secondary).
+
+Setting $k_\theta = v_{vsat} = k_\eta = g_k = 0$ makes the model a smooth
+approximation of Level-1 with $m_{tri}=1$: exact in the ohmic limit and in
+deep saturation, up to ~6 % low around the knee (the tanh soft-switch rounds
+the hard corner).
+
+### Mechanism notes
+
+- **Gate-charge cap** (super-junction parts): the measured gate exponent
+  collapses from ~1.7 to ~0.1 above v_gs ≈ 8 V — the lightly doped pillars
+  hold finite free charge, so effective overdrive saturates. The soft
+  power-law cap is identity for $v_{ov} \ll v_{ovmax}$, asymptote $v_{ovmax}$
+  beyond, and
+  $\dfrac{d v_{ov}^{eff}}{d v_{ov}} = \bigl(1 + u^{k_{ovsharp}}\bigr)^{-1/k_{ovsharp} - 1}$
+  with $u = v_{ov}/v_{ovmax}$, hence $0 \le dv_{ov}^{eff}/dv_{ov} \le 1$
+  everywhere. Measured collapse is abrupt → $k_{ovsharp} \approx 10$, not 1.
+  Applied **before** $v_{knee}$: the pinch-off voltage is set by the final
+  channel charge. Evaluated in log space (`logaddexp`) — $k_{ovsharp}$ ~10–40
+  is a fitted regime, not a hypothetical one.
+- **Trap-filling gain** (4H-SiC): implied channel overdrive slope
+  $dv_{ov}/dv_{gs}$ rises past 1 as interface traps fill — impossible for the
+  pre-gain model (softplus slope saturates at 1, the cap only reduces). The
+  gain gives $dv_{ov}^{eff2}/dv_{ov}^{eff} = 1 + 2k_{\beta\text{-trap}} v_{ov}^{eff} > 1$.
+  **$k_{\beta\text{-trap}} \ge 0$ is a hard constraint** (ValueError below):
+  negative values make $v(1+k v)$ non-monotone and $i_d$ multi-valued in
+  $v_{gs}$. With the cap active the composite asymptote is
+  $v_{ovmax}(1 + k_{\beta\text{-trap}} v_{ovmax})$, so the two knobs
+  anti-correlate on silicon — never mix records that free one vs the other.
+- **Knee softness** $k_{kneesharp}$: $k_\theta$ and $v_{vsat}$ move knee
+  position *and* width together (~84 % correlated). The power-law soft-min
+  breaks the coupling: $dv_{dseff}/dv_{ds}(0) = 1$ and $v_{dseff} \to v_{knee}$
+  hold for every $k_{kneesharp}$ — Ron and the saturation plateau are
+  untouched while knee width shrinks monotonically
+  ($k \to \infty$ hard min, $k = 1$ harmonic, $k \approx 2.8$ reproduces the
+  tanh). Same $0 \le dv_{dseff}/dv_{ds} \le 1$ derivative bound as the cap.
+- **Trench kink**: the gate is the one-sided sigmoid above, not bare tanh —
+  tanh is odd and injects *negative* current below onset (non-physical, a
+  convergence hazard in the off state).
+- **Off state**: below threshold the softplus channel is the only channel
+  current, falling gate-dependently with slope $1/v_{sub}$. With the body
+  diode on, its reverse saturation $i_s(T) + i_{sr}(T)$ is the floor instead.
+  Real HV leakage needs a dedicated BV/Ibv element, not a fitted resistor.
+- **Polarity**: the channel formulation is forward-only ($v_{ds} \ge 0$) —
+  the velocity divisor is singular near $v_{ds} = -v_{vsat}$ and $k_{db}$ is
+  odd. All reverse current is diode current; sign-symmetric synchronous-
+  rectifier conduction is a queue item, not this model.
+
+### Sentinels (defaults = legacy behavior, bit-identical)
+
+| off switch | effect |
+|---|---|
+| `v_ovmax = 0` | cap is the exact identity |
+| `k_beta_trap = 0` | gain is the exact identity |
+| `k_kneesharp = 0` | exact legacy tanh knee (fitted floor 0.1 — k→0 collapses i_d) |
+| `r_d = r_s = 0` | explicit fast path, no implicit solve |
+| `i_s = i_sr = 0` | diode current exactly 0 |
+| `i_kf = 0` | high-injection divisor off (LTspice `Ikf=inf`) |
+| TCs `= 0` | no diode temperature dependence |
+
+"Off" is reached by leaving a parameter out of the free set, never by driving
+it to the lower bound.
+
+## Package resistance (r_d, r_s, r_sk)
+
+Bond wires/leadframe/DBC are embedded **outside** the intrinsic channel,
+exactly as LTspice's Level-1 `Rd`/`Rs` do:
+
+$$
+v_{ds}' = v_{ds} - (r_d + r_s)\, i_d \qquad\text{(current loop: all of } i_d)
+$$
+$$
+v_{gs}' = v_{gs} - (r_s - r_{sk})\, i_d \qquad\text{(gate loop: returns at the kelvin tap)}
+$$
+$$
+i_d = f_{int}(v_{ds}', v_{gs}') \qquad\text{(implicit, solved per point)}
+$$
+
+$r_{sk}$ is the resistance between the kelvin tap and the power source pin
+(carrying only gate current): $r_{sk}=0$ is no kelvin contact (full
+degeneration $g_{m,eff} = g_m/(1 + r_s g_m)$), $r_{sk} = r_s$ is an ideal tap
+at the die. Guard $0 \le r_{sk} \le r_s$ (ValueError). DC data senses only
+$r_d + r_s$ and $r_s - r_{sk}$; the split itself needs 4-terminal AC data.
+
+The implicit equation is solved with bracketed safeguarded Newton (fixed
+point diverges: the contraction factor is $(r_d+r_s) k_p v_{ov} \approx 1.6$
+at DEFAULT). The bracket $i_d \in [0, v_{ds}/(r_d+r_s)]$ is invariant because
+
+$$
+\frac{dg}{di_d} = -(r_d + r_s)\frac{\partial f}{\partial v_{ds}} - (r_s - r_{sk})\frac{\partial f}{\partial v_{gs}} - 1 \le -1
+$$
+
+whenever the partials are non-negative — monotonicity is all the proof needs
+(the trap gain inflates the bound but preserves monotonicity for
+$k_{\beta\text{-trap}} \ge 0$). $f_{int}(0, \cdot) = 0$ exactly, which makes
+clamping internal $v_{ds}$ at 0 harmless on overshoot. Non-convergence raises
+RuntimeError; it never silently returns an unconverged current.
+
+## Body diode
+
+The **LTspice diode DC branch** (`diode.py`), wired at the device TERMINALS so
+it **bypasses r_d/r_s** — only channel current flows through the package
+resistances, keeping the two implicit solves independent 1-D problems:
 
 ```
-i_d  = k_p·v_ov_eff2·(v_dseff − v_dseff²/(2·v_knee))/(1 + v_dseff/v_vsat)·(1 + k_lambda·v_ds·k_db)
-       + g_k·v_ds·k_kink·k_db
-
-k_db     = tanh(v_ds/v_dbsat)                            drain bias: 0 ohmic, ~1 above knee
-v_th     = v_th0 − k_eta·v_ds·k_db                       DIBL, bounded
-v_ov     = v_sub·ln(1 + exp((v_gs − v_th)/v_sub))        smooth subthreshold → strong inversion
-v_ov_eff = v_ov/(1 + (v_ov/v_ovmax)^k_ovsharp)^(1/k_ovsharp)   soft charge cap (v_ovmax = 0 → off)
-v_ov_eff2 = v_ov_eff·(1 + k_beta_trap·v_ov_eff)  interface-trap-filling gain (k_beta_trap = 0 → off)
-v_knee   = max(v_ov_eff2/(1 + k_theta·v_ov_eff2), v_kneemin)  vertical-field mobility degradation
-v_dseff  = v_knee·tanh(v_ds/v_knee)   or   softmin(v_ds, v_knee, k_kneesharp)
-k_kink   = 0.5·(1 + tanh((v_gs − v_thk)/v_kovsoft))      one-sided trench-kink gate
+   drain o──[r_d]──(D')══════ channel ══════(S')──[r_s]──┬─o source
+         │                                               │
+         └───────── diode + r_diode ─────────────────────┘   anode = source
 ```
 
-Setting `k_theta = v_vsat = k_eta = g_k = 0` makes the model a smooth approximation of
-the Level-1 equations with `m_triode = 1`: the soft drain variable rounds the
-hard corner, so it is exact in the ohmic limit and in deep saturation but up to
-~6 % low around the knee. Quantified by
-`tests/test_model.py::test_level1_limit_agreement`.
+Terminal current ($v_{sd} = -v_{ds}$, positive $i_{di}$ flows source → drain):
 
-### Naming convention
+$$
+i_d^{term} = i_{ch}(v_{ds} > 0) - i_{di}(v_{sd})
+$$
 
-Every model quantity is `<type prefix>_<suffix>` (source of truth: `names.xlsx`):
+$$
+i_{di} =
+\underbrace{\frac{i_s(T)\bigl[e^{v_{di}/(k_n v_T)} - 1\bigr]}{\sqrt{1 + \dfrac{i_s(T)}{i_{kf}}\bigl[e^{v_{di}/(k_n v_T)} - 1\bigr]}}}_{\text{diffusion + high-injection compression}}
++ \underbrace{i_{sr}(T)\bigl[e^{v_{di}/(k_{nr} v_T)} - 1\bigr]}_{\text{recombination}},
+\qquad
+v_{di} = v_{sd} - r_{diode}(T)\, i_{di}\ \text{(implicit)}
+$$
+
+Temperature laws (LTspice-exact, all referenced to $T_{nom}$):
+
+$$
+i_s(T) = i_s \left(\frac{T}{T_{nom}}\right)^{k_{xti}/k_n}
+\exp\!\left[\frac{q\, v_{eg}}{k_B k_n}\left(\frac{1}{T_{nom}} - \frac{1}{T}\right)\right]
+\qquad\text{(same law for } i_{sr}, \text{ divisor } k_{nr})
+$$
+
+$$
+i_{kf}(T) = i_{kf}\bigl[1 + a_{ikf}(T - T_{nom})\bigr]
+\qquad
+r_{diode}(T) = r_{diode}\bigl[1 + a_{rd}(T - T_{nom}) + b_{rd}(T - T_{nom})^2\bigr]
+$$
+
+(code spellings `a_rdiode`, `b_rdiode`; the $a$/$b$ pair is the complete
+LTspice Trs1+Trs2 Rs law; the TC polynomial factor is clamped at a tiny floor
+where extrapolation would go negative, protecting the solver bracket.)
+
+LTspice model-card mapping:
+
+| LTspice | `Is` | `N` | `Isr` | `Nr` | `Ikf` | `Rs` | `Tnom` | `Xti` | `Eg` | `Tikf` | `Trs1` | `Trs2` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| package | `i_s` | `k_n` | `i_sr` | `k_nr` | `i_kf` | `r_diode` | `t_nom` | `k_xti` | `v_eg` | `a_ikf` | `a_rdiode` | `b_rdiode` |
+
+Verified against LTspice 26.0.1 to ~1e-5 relative (high-injection divisor
+across 3.4 A … 375 kA; TC laws at −55/25/100/150 °C) — details and the known
+LTspice `Isr`-branch quirk in STATUS/tests. Capacitance (Cjo/Vj/M), transit
+time, breakdown and noise are out of scope here: junction charge is the caps
+delta (below), recovery is the network (below), BV/Ibv is a queue item.
+
+## Body-diode recovery (minority-carrier storage) — LTspice-side
+
+Recovery is a **behavioral LTspice network** (`DiodeRecov` subckt), not
+package Python — it lives in the export layer
+(`out/ISC040N10NM8_recov.subckt`, report `out/RECOV_REPORT.md`). D1 is the
+diode DC branch above (Rs externalized to R1 = 5 mΩ); the storage node q_j
+carries a capacitor $C_1 = q_0/\tau$ to ground, fed by the current source
+$B1 = -i_{R2}/\tau$ (proportional to diode current) and clamped $V_q \ge 0$ by
+a diode with $R_{off} = \tau$.
+
+**Dynamics (simulation-verified).** The $R_{off} = \tau$ leak closes the
+storage loop: forward steady state
+
+$$
+V_q \to I_F\ \text{[volts]}, \tau\text{-independent}; \qquad
+\text{time constant } R_{off} C_1 = q_0; \qquad
+Q_{stored} = C_1 V_q = \frac{q_0 I_F}{\tau} \propto I_F
+$$
+
+so the netlist is dimension-normalized: $q_0$ = 35 n doubles as C1's farad
+scale and the storage time constant in seconds (35 ns). Reverse recovery is
+the charge-controlled conductance
+
+$$
+i_{rec} = \max\!\left[\frac{V_q\,(v_{Ki} - v_{Ai})}{\tau},\; 0\right]
+$$
+
+which carries the $-I_{RM}$ plateau (D1 itself is off, ~nA); the plateau ends
+when C1 (drained at $i_{rec}/\tau$ by B1) can no longer sustain
+$V_q (v_{Ki}-v_{Ai})/\tau = I_{RM}$:
+
+$$
+V_q^{snap} \approx \frac{I_{RM}\,\tau}{V_R}
+\qquad\text{(predicted 1.25 V, observed 1.33 V on the fitted bench)}
+$$
+
+Forward recovery is a charge-controlled resistor in series:
+
+$$
+v_{B3} = -i_{R2}\left[\frac{r_{max}}{1 + k_{chg} V_q} + 1\,\mu\Omega\right]
+$$
+
+(0.1 Ω cold → 1.6 mΩ hot at $V_q = I_F$, decay constant $q_0$; the 1 µΩ floor
+breaks near-singular B3/R1/R2/switch loops in bridge topologies, < 0.1 %
+waveform impact).
+
+**Two knobs:** $q_0$ sets timing (Qrr, t_rr ≈ linear in $q_0$), $\tau$ sets
+shape (plateau→tail departure, snap hardness; Qrr nearly τ-independent).
+Fitted on ISC040N10NM8 (V_R = 50 V, I_F = 12.5 A, di/dt = 1000 A/µs, settled
+500-period bench): $q_0 = 35$ n, $\tau = 5$ → Qrr 249.6 nC (datasheet typ
+247, +1.1 %), t_rr 27.6 ns (typ 25, +10 %). No $(q_0, \tau)$ hits both: the
+datasheet's Qrr *rises* with di/dt (36 nC @ 100 A/µs → 247 nC @ 1000 A/µs),
+which no single stored-charge state follows — the fit is tuned to the
+hard-switching condition. Datasheet-driven extraction protocol: open
+(HANDOVER, next session).
+
+**Integration requirements** (LTspice 26.0.1, all verified):
+`method=gear reltol=1e-4` (trapezoidal rings on the snap); the measured C_ds
+charge-master sits **inside** the recovery branch at Ki–A (electrically D–S
+through B3+R1/R2, fc ≈ 3 GHz) and the caps delta exports Cgs/Cgd **only** —
+at the D–S terminals hard forward re-turn-on crashes (D1 has no Cjo), at
+Ki–Ai the network is singular.
+
+## Capacitance / charge (summary — full spec in CAP_SPEC.md)
+
+Charge-master LUTs $q_k(v) = \int C\,dv$ (PCHIP on ln C vs linear v) built
+from digitized Ciss/Coss/Crss, with the $c_{gd}(v_{gd})$ splice (off-state
+table for $v_{gd} < 0$, exponential-saturation branch for $v_{gd} \ge 0$,
+$c_{gdmax}$ extracted from Qg curves). Exported to LTspice as the general
+nonlinear capacitor in **incremental ramp-sum** form,
+
+$$
+q(x) = q_0 + m_1 (x - x_0) + \sum_k \Delta m_k \max(0, x - x_k)
+$$
+
+so LTspice's symbolic $dq/dx$ is exactly the piecewise-constant C staircase
+and the end-segment slopes carry the clamp-C policy for free. The delta
+(Cgs G–S, Cgd G–D, Cds D–S) is terminal-wired; charge conservation is
+structural. Live parity ≤ 0.3 % on all three catalog parts.
+
+## Naming convention
+
+Every model quantity is `<type prefix>_<suffix>` (source of truth:
+`names.xlsx`):
 
 | prefix | type | examples |
 |---|---|---|
@@ -77,345 +367,41 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth: `names.xlsx`)
 | `r_` | resistance [Ω] | `r_d`, `r_s`, `r_sk` |
 | `g_` | conductance [S] | `g_k` — trench-kink conductance, *not* transconductance |
 | `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_beta_trap`, `k_agd` |
-| `c_` | capacitance [F] | `c_gd`, `c_gs`, `c_ds`, `c_gd0`, `c_gdmax` (CAP_SPEC) |
+| `c_` | capacitance [F] | `c_gd`, `c_gs`, `c_ds`, `c_gd0`, `c_gdmax` |
 | `q_` | charge [C] | `q_gd`, `q_gs`, `q_ds` — the charge-master state variables |
 
-- Greek-letter parameters take the `k_` prefix so no name collides with a
-  Python keyword: θ → `k_theta`, η → `k_eta`, λ → `k_lambda` (bare `lambda` is
-  a keyword). The `k_` factors are unitless EXCEPT the industry-standard set:
-  `k_p` [A/V²] and the 1/V quartet `k_lambda`, `k_eta`, `k_theta`,
-  `k_beta_trap`.
+- Greek parameters carry `k_` so no name collides with a Python keyword
+  (θ → `k_theta`, λ → `k_lambda`). The `k_` factors are unitless EXCEPT the
+  industry-standard set: `k_p` [A/V²] and the 1/V quartet `k_lambda`,
+  `k_eta`, `k_theta`, `k_beta_trap`.
 - `db` = drain **bias**, not drain-to-body — this model has no bulk terminal.
-  `k_db = tanh(v_ds/v_dbsat)` is the drain-bias factor that gates DIBL, CLM and
-  the kink term (0 in the ohmic region, ~1 above the knee).
-- Sharp/soft duality: `*_sharp` names are power-law **exponents** — bigger =
-  sharper transition (`k_ovsharp`, `k_kneesharp`); `*_soft` names are voltage
-  **scales** — bigger = softer transition (`v_kovsoft`).
+- Sharp/soft duality: `*_sharp` names are power-law **exponents** (bigger =
+  sharper: `k_ovsharp`, `k_kneesharp`); `*_soft` names are voltage **scales**
+  (bigger = softer: `v_kovsoft`).
 - `m_triode` is the one carve-out: `vdmos_id_level1()` is a foreign-model
-  adapter for LTspice's Level-1, and keeping the model-card spelling `mtriode`
-  *is* the mapping. Everything else in this repo follows the convention.
-- CSV on-disk headers: `load_csv()` accepts **both** external spellings,
-  matched per column, case-insensitively, order-free (extra columns like the
-  digitizer's `index` are ignored): the legacy SPICE-style `vgs,vds,ids`
-  (what `save_csv()` writes, and the already-digitised datasheet files) and
-  the digitizer/model naming `index,V_ds,I_d,V_gs` (what `curve_digitizer`
-  exports). `data.py` maps the attribute names (`CurveSet.v_gs/v_ds/i_d`) to
-  those header spellings — no per-script loader workarounds (session 20).
+  adapter and keeping the model-card spelling `mtriode` *is* the mapping.
+- The recovery parameters (`q_0`, `tau`, `k_chg`, `r_max`) are deliberately
+  outside the convention — LTspice-side netlist values, dimension-normalized
+  (see the recovery section).
 
-### Gate-overdrive charge cap (v_ovmax, k_ovsharp)
+## Extraction
 
-On a super-junction part the measured gate exponent α = d ln i_d/d ln v_ov is
-**bimodal**: ~1.6–1.8 at low overdrive, collapsing to ~0.1 above v_gs ≈ 8 V
-(ST8L65N044M9, 25 °C pulsed: 1.68 / 1.61 / 1.00 / 0.16 / 0.07 across
-v_gs 5→6→7→8→9→10 at the top of each curve). No setting of k_theta/v_vsat/k_lambda can drop α
-by an order of magnitude. The physical picture: the lightly doped N pillars
-that carry the drain current hold only a **finite amount of free charge** —
-once the surface channel is strongly enhanced, driving the gate harder cannot
-add much more mobile charge in the pillar, so the *effective* overdrive
-saturates even though v_gs keeps rising, as if one of two series channels hit
-its ceiling.
-
-The cap implements that as a soft power-law saturation of v_ov (equation
-above): identity for v_ov ≪ v_ovmax (subthreshold and the Ron limit untouched),
-asymptote v_ovmax for v_ov ≫ v_ovmax, and **0 ≤ dv_ov_eff/dv_ov ≤ 1 everywhere** —
-the monotonicity half of that bound is what keeps the package-R solver's
-bracket invariant dg/di_d ≤ −1 intact (the trap-filling gain below breaks the
-≤ 1 half but not the monotonicity). `k_ovsharp` sets the sharpness; the
-measured collapse is abrupt, so k_ovsharp ≈ 10 rather than the k_ovsharp = 1 of
-a tanh. The cap is applied **before v_knee** 
-with a depleted pillar the pinch-off voltage is set by the
-depleted column, not by the surface charge. `v_ovmax = 0` (default) is the exact
-identity, so every pre-cap anchor stays bit-identical — pinned by
-`tests/test_gate_cap.py`.
-
-The previous mechanism, `kappa` (a drain-bias-dependent series resistance), was
-removed: `kappa` is a *voltage divider*, not a charge limit, and the cap beat it
-on the fit (6.88 % vs 7.45 % RMSE) with full Jacobian rank and ~1000× better
-conditioning.
-
-### Interface-trap-filling gain (k_beta_trap)
-
-On a 4H-SiC part the diagnostic points the **opposite** way: reading the
-near-origin ohmic point of each 25 °C output curve of the IMCQ120R004M2H
-(subtract the r_d·i_d drop, divide by k_p) gives an implied channel overdrive
-whose slope dv_ov/dv_gs **rises past 1** (0.48 at v_gs = 7 up to 1.29 at
-v_gs = 15). That is impossible for the pre-gain model: the softplus slope
-saturates at 1 and the cap only reduces. The physical picture: 4H-SiC channel
-mobility rises as the surface potential deepens and interface traps fill, so
-the conductance grows faster than (v_gs − V_th) — the WBG counterpart of the
-super-junction charge cap, same knob family, **opposite sign**.
-
-The gain implements that as
-`v_ov_eff2 = v_ov_eff·(1 + k_beta_trap·v_ov_eff)` (equation above, k_beta_trap
-[1/V]) and v_ov_eff2 becomes **the** effective overdrive for everything
-downstream: `v_knee = max(v_ov_eff2/(1 + k_theta·v_ov_eff2), v_kneemin)` and
-the i_d prefactor both use it. Composition decision: `k_theta` multiplies
-`v_ov_eff2`, not `v_ov_eff` — v_knee is the pinch-off/pinball knee set by the
-*final* channel charge, the same argument the cap section makes for applying
-the cap before v_knee.
-
-Session-18 probe anchors (cap off, k_lambda = 0, r_s = 0, 8-param protocol,
-reproduced bit-for-tolerance by the package model in session 19): RMSE
-8.53 → **4.61 %** (25 °C) and 6.13 → **3.31 %** (175 °C); k_beta_trap =
-0.0569 → 0.0757 1/V (+33 %, a real TC); Ron chord Vgs=18/15 3.701/4.729 mΩ
-(data 3.70/4.70); worst 25 °C curve v_gs = 8: 13.6 → 9.3 %.
-
-**Monotonicity and the package-R bracket.** The gain lifts
-`dv_ov_eff2/dv_ov_eff = 1 + 2·k_beta_trap·v_ov_eff` above 1 (measured 2.36 at
-25 °C, 3.00 at 175 °C, v_gs = 18) — it breaks the cap's `≤ 1` derivative bound
-but not monotonicity, and the bracket proof only needs monotonicity:
-`dg/di_d = −(r_d+r_s)·∂f/∂v_ds − r_s·∂f/∂v_gs − 1 ≤ −1` whenever the partials
-are ≥ 0. The steeper gate dependence inflates the bracket upper bound and
-makes Newton overshoot more, so the stall guard fires more often — tested
-with **r_s > 0 and the gain active** (`tests/test_overdrive_gain.py::test_package_r_bracket_with_gain_cap_off`
-and `..._stall_guard_with_cap_and_gain`).
-
-**k_beta_trap ≥ 0 is a hard constraint, not a fitted preference.** Negative
-k_beta_trap makes v(1 + k·v) non-monotone (derivative 1 + 2·k·v crosses zero
-at v = −1/(2k)), i_d multi-valued in v_gs, and kills the bracket proof.
-Decision (session 19, user-directed): bound it — `BOUNDS["k_beta_trap"] =
-(0.0, 2.0)` with the lower bound **exactly 0.0**, and `model.py` raises
-ValueError for k_beta_trap < 0 (the clamp alternative would silently evaluate
-the non-monotone branch — rejected). Physics says the constraint is free
-anyway: trap filling only *raises* mobility. Linear space (0 is legitimate,
-never logged); the 0 lower bound is safe here because the gain is continuous
-in k_beta_trap and **exactly the identity at 0** (r_d/r_s precedent, unlike
-the k_kneesharp floor argument). "Off" is still reached by leaving it out of
-the free set — it is NOT in DEFAULT_FREE.
-
-**Composition gotcha with the cap active (silicon SJ fits):** the asymptote of
-the composite is `v_ovmax·(1 + k_beta_trap·v_ovmax)`, **not** v_ovmax. On
-ST8L65 (v_ovmax ≈ 1.9, k_ovsharp ≈ 10) a freed k_beta_trap ≈ 0.06 lifts the
-plateau ~11 %, so k_beta_trap ↔ v_ovmax anti-correlate (synthetic round trip:
-corr ≈ −0.85) and v_ovmax drops to compensate. The official ST8L65 record
-(3.79 %, `reference.py`) keeps k_beta_trap **out of the free set** and stays
-bit-identical; if it is ever freed on a silicon part, re-quote the record and
-report the correlation — never mix records. The same doctrine applies inside
-the official IMCQ record (session 21): there k_beta_trap IS free and
-anti-correlates with k_p (corr −0.95, k_p25 9.32 / k_bt25 0.469 vs the per-T
-anchors 25.74 / 0.057) — the composite `k_p(T)·v_ov_eff2(T)` is the record,
-never the pair.
-
-### Drain-knee softness (k_kneesharp)
-
-k_theta and v_vsat move the knee position **and** width together — they are ~84 %
-correlated in fits because both flatten the knee while setting it, and the
-tanh soft-switch ties the transition width to `v_knee` itself. `k_kneesharp` breaks that
-coupling: it replaces the tanh with the **same power-law soft-min** used for
-the gate cap, `v_dseff = v_ds/(1 + (v_ds/v_knee)^k_kneesharp)^(1/k_kneesharp)`. Shape-only by construction:
-`dv_dseff/dv_ds(0) = 1` and `v_dseff → v_knee` hold for every `k_kneesharp`, so **Ron and the i_d,sat
-plateau are untouched** while the knee width shrinks monotonically with `k_kneesharp`
-(`k_kneesharp → ∞` is a hard min, `k_kneesharp = 1` the harmonic soft-min; `k_kneesharp ≈ 2.8` reproduces
-the legacy tanh knee, L2 rms 0.024·v_knee). Same log-space evaluation and the same
-`0 ≤ dv_dseff/dv_ds ≤ 1` derivative bound as the cap, so the package-R solver bracket
-invariant survives. `k_kneesharp = 0` (default) is the exact legacy tanh — every
-pre-k_kneesharp anchor stays bit-identical (`tests/test_drain_softness.py`). Caveat:
-with the DEFAULT demo set (`v_vsat = 1.5 ≪ v_knee ≈ 5 V`) the velocity-saturation
-divisor creates a mild gds dip near the knee *even at k_kneesharp = 0* (−1.9 S at
-v_ds ≈ 6 V, absorbed by the −2.0 S tolerance in
-`test_improved_model_has_no_negative_gds`); a sharper `k_kneesharp` deepens it. That is
-a property of those parameters, not of the switch — refit `v_vsat` up or `k_kneesharp`
-down if a device lands in that regime.
-
-### Off state
-
-Below threshold the softplus channel is the **only** channel current: i_d
-falls gate-dependently with slope 1/v_sub down to ~1e-13 A at v_gs = 0. With
-the body diode ON (i_s > 0), the diode's reverse saturation i_s(T) + i_sr(T)
-becomes the off-state floor at v_ds > 0 (µA scale on ST8L65 —
-Shockley-consistent, exactly what LTspice does); the softplus floor only
-dominates while the diode is off. Real high-voltage leakage still needs a
-dedicated element (BV/Ibv), not a fitted resistor.
-
-### Package resistance (r_d, r_s, r_sk)
-
-`r_d`/`r_s` (bond wires, leadframe, DBC) are embedded **outside** the intrinsic
-channel, exactly as LTspice's Level-1 `Rd`/`Rs` model-card parameters do —
-`vdmos_id_level1()` takes the same kwargs for a fair A/B:
-
-```
-v_ds' = v_ds - (r_d + r_s)·i_d      current loop: ALL of i_d
-v_gs' = v_gs - (r_s - r_sk)·i_d     gate loop: returns at the KELVIN tap (r_sk = 0)
-i_d   = f_intrinsic(v_ds', v_gs')     (implicit; solved per data point)
-```
-
-r_s is not a pure series drop: it **degenerates the gate** (gm_eff = gm/(1 + r_s·gm)).
-**Kelvin-aware split (`r_sk`, session 22):** parts with a kelvin source pin close
-the gate loop at the *kelvin tap*, not at the power source pin. `r_sk` is the
-resistance between the kelvin tap and the power source pin (the downstream
-segment of `r_s`, carrying only gate current — zero in the DC model), so the
-gate loop sees only `r_s − r_sk` while the FULL `r_s` stays in the current
-path: `r_sk = 0` is "no kelvin contact" (the legacy semantics above,
-bit-identical), `r_sk = r_s` is the ideal tap at the die (gate loop clean,
-gm_eff = gm). Guard: `0 ≤ r_sk ≤ r_s` (ValueError — the tap is a point ON the
-source path; a negative degeneration is not a passive network and breaks the
-bracket proof). Pinned by `tests/test_kelvin_split.py`. The DC data senses only
-`r_d + r_s` and `r_s − r_sk`; the `r_s`/`r_sk` split itself needs the 4-terminal
-subckt (AC gate current through `r_sk` — the whole point of a kelvin pin).
-The implicit equation is solved with bracketed safeguarded Newton, never
-fixed-point iteration — in the ohmic region the fixed-point contraction factor
-is (r_d+r_s)·k_p·v_ov ≈ 1.6 for DEFAULT, which diverges. The solver also carries a
-per-point **stall guard**: with the gate cap, `r_s·i_d` can drag the internal
-gate across the cap knee and make g(i_d) flat-then-cliffy, putting Newton into
-a two-cycle that shrinks the bracket only ~1e-5 per iteration; if the bracket
-width fails to shrink by 10 % three consecutive times, Newton is vetoed and
-bisection forced until progress resumes (pinned by
-`tests/test_package_r.py::test_solver_survives_newton_two_cycle`).
-r_d = r_s = 0 takes the explicit fast path (bit-identical to the pre-package-R
-model; pinned by `tests/test_package_r.py`). Forward polarity only (v_ds ≥ 0):
-the channel-only model is singular in reverse — `vdmos_id` never routes
-negative v_ds into this solver; the body diode carries it (next section).
-
-### Body diode
-
-The body diode is the **LTspice diode DC branch** (module `diode.py`), wired
-at the device TERMINALS so it **bypasses r_d/r_s** — only channel current
-flows through the package resistances, and the two implicit solves
-(package-R, diode r_diode) stay independent one-dimensional problems:
-
-```
-   drain o──[r_d]──(D')══════ channel ══════(S')──[r_s]──┬─o source
-         │                                               │
-         └───────── diode + r_diode ─────────────────────┘   anode = source
-
-i_d = i_ch(v_ds > 0) − i_di(v_sd = −v_ds)
-
-i_di = i_diffuse + i_recomb
-v_di = v_sd − r_diode·i_di                                (implicit)
-i_diffuse = i_s(T)·[exp(v_di/(k_n·v_therm)) − 1] / sqrt(1 + i_s(T)/i_kf·[exp(…) − 1])
-i_recomb  = i_sr(T)·[exp(v_di/(k_nr·v_therm)) − 1]
-i_s(T)  = i_s ·(T/T_nom)^(k_xti/k_n) ·exp[(v_eg·q/k_B/k_n)·(1/T_nom − 1/T)]
-          (same law for i_sr(T), divisor k_nr)
-i_kf(T)    = i_kf·(1 + a_ikf·(T − T_nom))          (LTspice Tikf law)
-r_diode(T) = r_diode·(1 + a_rdiode·(T − T_nom)
-                     + b_rdiode·(T − T_nom)²)       (LTspice Trs1 + Trs2 laws)
-```
-
-Sign convention: `v_sd = −v_ds`, anode = source (N-FET); positive i_di flows
-source → drain. The diode CSV keeps the datasheet source-referenced spelling
-(`I_sd,v_sd,T`); the conversion lives in the model/fitter.
-
-LTspice mapping: `Is→i_s  N→k_n  Isr→i_sr  Nr→k_nr  Ikf→i_kf  Rs→r_diode
-Tnom→t_nom  Xti→k_xti  Eg→v_eg  Tikf→a_ikf  Trs1→a_rdiode
-Trs2→b_rdiode`. Capacitance
-(Cjo/Vj/M), transit time, breakdown (BV/Ibv) and noise are out of scope;
-instance multiplicity (`m=`)
-is a wiring-level parallel-device count, not a model parameter (the
-model-card `M` is the junction grading coefficient — capacitance only), so
-`M = 1` here. The Trs1+Trs2 pair is the complete LTspice Rs temperature law.
-
-Verified against LTspice 26.0.1 (`.dc`/`.step temp`/`.meas` probes, pinned by
-`tests/test_diode.py::test_ltspice_cross_validation`):
-
-- the high-injection divisor matches LTspice to ~1e-5 relative across
-  3.4 A … 375 kA;
-- the saturation-current temperature law uses **N** (not Berkeley's NTT) as
-  the divisor of k_xti and v_eg; the recombination branch uses **Nr**;
-- LTspice's own recombination branch deviates from its documented
-  `Isr·(exp(V/NrVt)−1)` by ~1 % at 0.02 V growing to ~17 % at 0.3 V
-  (V-dependent, exactly linear in Isr — an implementation quirk). We
-  implement the *documented* form; the cross-validation test covers the
-  diffusion + Ikf + temperature terms only, and the ST8L65 data lives at
-  0.56–1.05 V where i_sr is unsensed anyway;
-- the TC laws are exactly `X(T) = X·(1 + TC·(T − Tnom))` (Tikf) and
-  `Rs(T) = Rs·(1 + Trs1·(T − Tnom) + Trs2·(T − Tnom)²)`, referenced to
-  **Tnom** (not 27 °C): a `Tikf=0.006 Trs1=0.008 Trs2=2e-5` probe matches to
-  ~1e-5 relative at −55/25/100/150 °C × 0.6/0.9 V; a 27 °C-referenced
-  variant misses by 0.1–0.8 %, TC-off by up to 25 %, and linear-only (no
-  Trs2) by up to 10.6 % at 150 °C
-  (`test_diode.py::test_ltspice_tc_laws`).
-
-Channel for `v_ds ≤ 0` is **0**: the channel formulation is forward-polarity
-only (odd k_db, singular velocity divisor). All reverse current is diode
-current. Sign-symmetric channel conduction for synchronous rectification
-(`sign(v_ds)·i_d(|v_ds|, v_gs)`) is a Queue item, not this model.
-
-Sentinels: `i_s = i_sr = 0` (the default) → diode current exactly 0 →
-`vdmos_id` is bit-identical to the pre-diode model (pinned by
-`tests/test_diode.py`). `i_kf = 0` → high-injection divisor off (LTspice
-`Ikf = inf` equivalent); the divisor applies to the forward branch only —
-reverse saturation is physically unaffected by high-level injection. "Off"
-is reached by leaving the parameter out of the free set, never by driving it
-to the lower bound (bounds start at 1e-22 A / 1e-3 A for that reason).
-`a_ikf = a_rdiode = b_rdiode = 0` (the defaults, LTspice's own defaults) →
-no temperature dependence, bit-identical to the pre-TC model; the TCs act on
-i_kf/r_diode only, never on the Xti/Eg law. TC bounds ((−0.005, +0.05)/°C;
-b_rdiode (−1e-4, +1e-3)/°C²) keep the factor sane across −55…150 °C; where
-the polynomial would extrapolate negative the factor is clamped at a tiny
-floor so the solver bracket proof survives absurd extrapolation temperatures.
-
-Extraction: `fit_diode()` on `DiodeCurveSet` (multi-temperature, per-point
-temperature). The free set IS the protocol — see `scripts/fit_st8l65_diode.py`
-and STATUS, "Current ST8L65 diode fit": k_n fixed at 2.0 from physics,
-i_kf/v_eg/r_diode + all three TCs free, i_sr off (unsensed). **Session 15
-promotion (user override):** the official record is the 7-param TC+Trs2 fit —
-**3.91 %** (−55 °C 2.37, 25 °C 3.16, 150 °C 5.49): a_ikf = +0.83 %/°C,
-a_rdiode = +0.48 %/°C, b_rdiode = −1.78e-5/°C². The five-knob
-r_diode/i_kf/a_ikf/a_rdiode/b_rdiode block is strongly correlated
-(|corr| ≤ 0.985, σ(i_kf) ≈ 15) — quote the CURVE, never the split. Baselines
-live on as script probes: `tc_off_probe` 4.78 % (session 12),
-`trs2_off_probe` 4.15 % (session 14).
-**Trs2 diagnosis (why the gain is modest):** the stubborn 150 °C
-residual is the 5 A point (+13 %): its digitized v_sd is ~12 mV off, in the
-exponential region where r_diode carries only ~10 mV of the 562 mV drop — no
-series-R TC (linear or quadratic) can fix it; excluding that point the
-150 °C rms is ~3.8 % for both the 6- and 7-param fits. See the Trs2
-promotion section in STATUS.
-
-## Project status
-
-Twenty-one sessions, all committed to `main` except the session-21 record
-work (session 15 promoted the 7-param TC+Trs2 diode fit to the official
-record; sessions 16–17 settled and landed the capacitance/charge model —
-`caps.py` charge-master LUTs + c_gd splice + `extract_cmax()` from Qg +
-`ltspice.py` nonlinear-cap export with live parity; session 18 digitized the
-IMCQ120R004M2H SiC IV data and ran the two-temperature fits; session 19 landed
-the interface-trap-filling gain `k_beta_trap` (off by default); session 20
-closed the CSV header contract — `load_csv()` now accepts both the legacy
-`vgs,vds,ids` and the digitizer `index,V_ds,I_d,V_gs` spellings; session 21
-closed the IMCQ joint multi-temperature fit and promoted it to the official
-IMCQ record). The package provides one C¹ continuous
-drain-current model (softplus subthreshold, gate-charge cap v_ovmax/k_ovsharp,
-interface-trap-filling gain k_beta_trap, mobility
-degradation, velocity saturation, DIBL, gated CLM, one-sided kink) embedded with
-package r_d/r_s (with the Kelvin-aware `r_sk` gate-loop split, session 22),
-**plus the body diode** (LTspice diode DC branch with
-high-injection compression and the Xti/Eg temperature law, terminal-wired,
-bypassing r_d/r_s), plus bounded least-squares extraction with identifiability
-diagnostics (dead Jacobian columns report σ = inf; `on_bounds` scales with the
-bound's magnitude, not the box width), plus a general PDF curve digitizer
-(`src/curve_digitizer`). Two mechanisms were added and then
-deleted as unsupported by the data: `kappa` (a voltage divider posing as a
-package resistance) and a `gds·v_ds` leak (a one-point parameter that flattened
-the subthreshold curve) — the off state is now the gate-dependent softplus
-floor (plus the diode's reverse saturation when the diode is on). Current
-**official** fits on ST8L65N044M9: channel **3.79 % relative RMSE
-(fit A, 10-param with `k_kneesharp` free, full 41-point set), Jacobian rank 8/10,
-cond 2.19e3**; diode **3.91 % on 30 points (−55/25/150 °C), v_eg =
-1.082 eV ≈ silicon bandgap, TCs a_ikf = +0.83 %/°C / a_rdiode = +0.48 %/°C /
-b_rdiode = −1.78e-5/°C²**
-(baselines: linear-TC-only 4.15 %, TC-off 4.78 %). `k_lambda`/`v_dbsat` report σ = inf because the data
-stops at v_ds = 20 V and carries no deep-saturation information — expected,
-not a fit failure. The SiC IMCQ120R004M2H channel model is now an **official
-record** too: `IMCQ120_JOINT` — the session-21 joint multi-temperature fit
-(IV 25/175 °C + transfer 25/175/200 °C @20 V + Rds(on)-Tj + Vth-Tj, 200 points
-/ 29 temperatures, TC laws as the only extra unknowns, **1.93 % relative
-RMSE**; quadratic `r_d(T)`, freed `k_theta`, `k_lambda ≈ 0`), pinned by
-`tests/test_imcq120_official.py`; protocol
-`scripts/fit_imcq120_joint.py`, report
-`out/IMCQ120_JOINT_FIT_REPORT.md` (the session-18 per-T report was deleted
-session 21; its durable findings are carried in that report's §8; the per-T
-scripts stay as historical baselines).
-The Q(V) charge model **landed** (charge-master LUTs +
-c_gd splice + c_gdmax extraction from Qg + LTspice nonlinear-cap export with
-live parity — see [`src/vdmos_fit/CAP_SPEC.md`](src/vdmos_fit/CAP_SPEC.md)).
-Suite green (test totals drift as headless Tk digitizer tests self-skip —
-don't pin counts). Remaining gaps: v_gs-dependent C_gd blend,
-full-device LTspice subckt (the Kelvin-aware `r_sk` split LANDED in the
-model, session 22 — the two open IMCQ DC gaps are NOT series-R topology;
-see `out/IMCQ120_KELVIN_SPLIT_REPORT.md`), HV leakage, thermal node —
-details and open problems in
-[`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md).
+1. **Relative weighting** first — subthreshold and high-current points weigh
+   equally, so the low-current shape (`v_th0`, `v_sub`) is not swamped;
+   **ampere weighting** second — makes the Ron/Rds(on) corner dominate, which
+   is what datasheet specs pin down.
+2. Positive parameters are optimised in **log space** with physical bounds
+   (zero-able linear parameters — `r_d`, `r_s`, `v_ovmax`, `k_kneesharp` —
+   stay linear; their 0 value is the "off" sentinel and cannot be logged).
+3. The **free set IS the protocol**: check `identifiability()` — dead
+   Jacobian columns report σ = inf, never 0; order-unity σ means weakly
+   determined. `k_theta`/`v_vsat` are ~84 % correlated (both flatten the
+   knee); quote the curve, never the split.
+4. Static data pins $r_d + r_s$ tightly (±0.3 % synthetic) but the split is
+   −0.999 correlated and leans on r_s's gm-degeneration signature (±15 %).
+   Quote the sum; split from geometry or 4-terminal data.
+5. $r_d + r_s$ is always **below** the measured Rds(on) chord — the rest is
+   the intrinsic channel the model computes separately.
 
 ## Layout
 
@@ -429,24 +415,19 @@ ImprovedVDMOS/
 │   ├── params.py           Params dataclass, bounds, log-space packing
 │   ├── data.py             CurveSet / DiodeCurveSet / CapCurveSet / QgCurveSet, CSV I/O
 │   ├── fit.py              least_squares extraction + identifiability (+ fit_diode)
-│   ├── reference.py        official fitted device records (ST8L65 channel +
-│   │                       diode, IMCQ120 joint multi-T, caps ×3)
+│   ├── reference.py        official fitted device records
 │   ├── ltspice.py          LTspice export: charge-master nonlinear-cap subckt
 │   ├── plotting.py         output/transfer/gds/overlay plots
 │   ├── cli.py              `vdmos-fit` command
-│   ├── STATUS.md           session log, open problems, missing architecture
+│   ├── STATUS.md           session log, official records, open problems
 │   └── CAP_SPEC.md         settled capacitance/charge-model design spec
-├── src/curve_digitizer/    PDF curve digitizer (axis calibration, markers,
-│                           skeletonization) — `curve-digitizer` console script
-├── tests/                  pytest suite (model regressions + fit round-trips,
-│                           test_st8l65_official / test_imcq120_official pin the
-│                           official records, test_diode.py incl. LTspice
-│                           cross-validation, test_caps.py incl. live LTspice
-│                           parity, test_data.py CSV header contract)
+├── src/curve_digitizer/    PDF curve digitizer — `curve-digitizer` console script
+├── tests/                  pytest suite (records pinned; LTspice cross-validation
+│                           and live cap parity run when LTspice is installed)
 ├── scripts/                thin entry points (no logic here)
 ├── data/                   measured/digitised CSVs (see data/README.md)
 ├── notebooks/              exploratory work
-└── out/                    generated plots + fitted_params.txt (gitignored)
+└── out/                    generated plots, fitted params, subckt templates (gitignored)
 ```
 
 ## Setup
@@ -456,14 +437,13 @@ cd Projects/ImprovedVDMOS
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e ".[dev]"
-pytest                            # suite green (digitizer Tk window tests self-skip
-                                  # headless; totals drift — don't pin the count)
+pytest                            # suite green (headless Tk tests self-skip; totals drift)
 vdmos-fit check                   # reference numbers + plots
 python scripts/roundtrip_demo.py  # synthetic recovery of known parameters
 ```
 
 Without installing, the `scripts/` entry points add `src/` to `sys.path`
-themselves, so `python scripts/roundtrip_demo.py` works in a bare environment.
+themselves.
 
 ## Usage as a library
 
@@ -477,192 +457,18 @@ res = fit(load_csv("data/IPW065N04N.csv"), weight="relative")
 print(res.summary())
 ```
 
-## Fitting strategy
-
-1. **Relative weighting** first — treats subthreshold and high-current points
-   equally, so the low-current shape (v_th0, v_sub) is not swamped.
-2. **Ampere weighting** second — makes the Ron / Rds(on) corner dominate, which
-   is what datasheet specs actually pin down.
-3. Positive parameters are optimised in **log space** with physical bounds; this
-   keeps the trust-region solver out of singular regions (k_p ≤ 0, v_sub → 0).
-4. Check `identifiability(result).summary()` — parameters with order-unity sigma
-   are weakly determined by static data alone. On a typical grid `v_thk` carries
-   ~2000× less sensitivity than `k_p`, and `k_theta`/`v_vsat` are ~84 % correlated
-   (both flatten the knee), so their individual values are meaningless even when
-   the fit is excellent. Fix one from independent data, or get them from Q(V)
-   and double-pulse switching instead.
-5. `r_d` and `r_s` are fitted by default (datasheet Rds(on) is a 2-terminal spec
-   that already contains them). Expect **r_d ↔ r_s ≈ −0.999 correlated**: static
-   data pins their *sum* tightly (synthetic round trip: 0.3 % on r_d+r_s) but the
-   split leans on r_s's gm-degeneration signature (individually ±15 %). Treat
-   r_d+r_s as the measured quantity; split from geometry or 4-terminal data if
-   you have it.
-
-## Implementation notes
-
-Design rationale consolidated out of the `src/vdmos_fit` code comments.
-
-### Model limits and the Level-1 A/B reference
-
-- Asymptotics of the unified expression (`v_ov_g` below means `v_ov_eff2` —
-  with `k_beta_trap = 0` it reduces to `v_ov_eff`): for `v_ds ≪ v_knee`,
-  `i_d → k_p·v_ov_g·v_ds·(1 + …)` (ohmic, m_triode = 1); for `v_ds ≫ v_knee`,
-  `i_d → 0.5·k_p·v_ov_g²·(0.5 + k_theta·v_ov_g)/(1 + k_theta·v_ov_g)² / (1 + v_knee/v_vsat)`.
-- `vdmos_id_level1()` implements Level-1 **as actually implemented**: knee at
-  `v_ds = v_ov/mtriode`, verified against LTspice 26.0.1 `.meas` (the C1 table
-  in "Why"; min i_d over 0–6 V = 4.0 A for every mtriode — no negative-gds
-  region). `m_triode` sets `Ron = 1/(m·Kp·v_ov)` and the knee position but
-  cannot change `i_d,sat = 0.5·Kp·Vov²`.
-- Level-1's r_d/r_s get the same external series embedding as the improved
-  model (implicit solve, shared solver) for a fair A/B; pass `r_d = r_s = 0`
-  for the bare equation reference.
-
-### Trench kink: one-sided sigmoid
-
-The kink gate is `0.5·(1 + tanh((v_gs − v_thk)/v_kovsoft))`, not bare `tanh()`. Tanh
-is odd, so a bare tanh injects **negative** current below the kink onset
-(about −40 mA at v_gs = 0, v_ds = 1 V for the nominal parameter set) —
-non-physical and a convergence hazard in the off state. The one-sided form
-is identical to tanh once v_gs is a few v_kovsoft above v_thk (tanh already saturates
-at 1.0 in float) and decays smoothly to zero below.
-
-### Charge-cap numerics
-
-- The cap is evaluated in **log space** (`logaddexp`) so `(v_ov/v_ovmax)^k_ovsharp`
-  cannot overflow: k_ovsharp ~ 10–40 is a fitted regime, not a hypothetical one.
-  Its derivative is `(1 + u^k_ovsharp)^(−1/k_ovsharp − 1)` with `u = v_ov/v_ovmax`, hence
-  0 ≤ dv_ov_eff/dv_ov ≤ 1 everywhere.
-- "Cap off" is reached by **leaving v_ovmax out of the free set**, not by
-  driving it to the lower bound: v_ovmax → 0⁺ means "hard cap at zero volts",
-  the opposite of off. `v_ovmax = 0` exactly is the identity transform.
-- The trap-filling gain is applied **after** the cap and is evaluated directly
-  (no log space needed): `dv_ov_eff2/dv_ov_eff = 1 + 2·k_beta_trap·v_ov_eff`
-  exceeds 1 — the composite gate gain `dv_ov_eff2/dv_ov` is bounded by
-  `1 + 2·k_beta_trap·v_ovmax` with the cap active. It stays POSITIVE for
-  k_beta_trap ≥ 0 (negative values raise ValueError), which is all the
-  package-R bracket proof needs.
-
-### Package-R solver
-
-- Bracket: `i_d ∈ [0, v_ds/(r_d + r_s)]` — the terminal resistance is never
-  below r_d + r_s. `g(i_d) = f(·) − i_d` is strictly decreasing
-  (`dg/di_d = −(r_d+r_s)·∂f/∂v_ds − (r_s−r_sk)·∂f/∂v_gs − 1 ≤ −1`) and `f(0, ·) = 0`
-  exactly (every model term is gated by v_ds or tanh(v_ds/v_knee)), which also
-  makes clamping the internal v_ds at 0 harmless when a trial point
-  overshoots. Partial derivatives are central differences (the model is C1).
-- The bracket proof needs the partials **non-negative** (monotonicity), not
-  ≤ 1: the trap-filling gain multiplies ∂f/∂v_gs by
-  `1 + 2·k_beta_trap·v_ov_eff` — it inflates the bracket upper bound
-  `i_max = f(v_ds, v_gs)` and steepens Newton (the stall guard fires more
-  often), but monotonicity survives for k_beta_trap ≥ 0 and k_beta_trap < 0
-  is rejected outright. Tested with r_s > 0 and the gain active
-  (`tests/test_overdrive_gain.py`).
-- The solver **raises RuntimeError** on non-convergence; it never silently
-  returns an unconverged current.
-- Forward polarity only: the velocity-saturation divisor `1 + v/v_vsat` is
-  singular near `v_ds ≈ −v_vsat` and the numerator is not odd, so the bracket
-  argument fails for v_ds < 0. `vdmos_id` never routes negative v_ds here —
-  the body diode carries reverse polarity — but the guard stays for direct
-  callers (and `vdmos_id_level1`, which has no diode, still fails loudly).
-
-### Bounds and fitting-space decisions
-
-- `k_p` is not the Level-1 k_p: it must be re-extracted when k_theta/v_vsat are added
-  (28 → ~34.7 at DEFAULT).
-- `v_ovmax` is excluded from `LOG_PARAMS` because 0 is a legitimate value
-  ("cap off") and cannot be logged. Its lower bound (0.05 V) is
-  deliberately well above 0 — between 0 and 0.05 V the cap is a hard clip
-  at nearly zero volts, so a free v_ovmax must never wander there.
-- `r_d`/`r_s` are fitted in linear space (the physical answer can be exactly
-  zero, and datasheet package resistance never approaches 0.5 Ω on a power
-  FET). The 0.5 Ω bound is a loose *global* ceiling only; per device, cap
-  r_d and r_s at the datasheet Rds(on) (see `scripts/fit_st8l65.py`
-  `DEVICE_BOUNDS`).
-- `r_d + r_s` is always **below** the measured Rds(on) chord — the rest of
-  Rds(on) is the intrinsic channel resistance, which the model computes
-  separately; r_d + r_s is the lower bound on Rds(on), approached only as
-  v_gs → large. With the gate cap in place there is no bias-dependent drain
-  element left to distinguish "package" from "undepleted drift": the two
-  are exactly degenerate (correlation +1.000 when split), so they are kept
-  as one parameter.
-- `v_ovmax`/`k_ovsharp` are deliberately **not** in `DEFAULT_FREE`: the cap is 0 (off)
-  for the low-VT anchor device and only needed for super-junction /
-  long-drift parts, where it must be freed explicitly (see
-  `scripts/fit_st8l65.py`). Adding them to the default set would silently
-  change every existing fit and anchor. Same rationale for `k_kneesharp`: 0 is the
-  legacy tanh, it is fitted in linear space (0 cannot be logged), and its
-  lower bound 0.1 keeps a free `k_kneesharp` away from the sentinel. The floor was
-  relaxed 0.5 → 0.1 when the ST8L65 optimum landed at k_kneesharp ≈ 0.47, below the old
-  guard: the data wants a knee softer than 0.5 allows. Do not relax it further
-  — k_kneesharp → 0 collapses the drain current.
-- `v_kneemin` is a numerical floor on v_knee — keep fixed, never fitted.
-
-### Fitter diagnostics
-
-- **`on_bounds`**: a value counts as pinned only when it sits within
-  `rel_tol` of a bound measured against
-  `max(|bound|, |value|, ZERO_FLOOR)` with ZERO_FLOOR = 1e-5 (model units).
-  The old span-based tolerance was a false-positive machine on wide boxes:
-  the deleted gds bound (1e-9, 10) S had span 10 S, so any gds below 0.01 S
-  was called "pinned LOWER" — including the physically meaningful 6.8e-5 S
-  (session-6 fit output). The floor keeps the test meaningful for
-  zero-bounded linear-space parameters: r_s = 3.8e-9 Ω is numerically at
-  zero (pinned), while r_s = 0.66 mΩ is a real fitted value (not pinned).
-- **`identifiability`**: a zero-sensitivity column reports σ = `inf`, never
-  0 — a bare `pinv(Jᵀ J)` returns *zero variance* for a column of zeros,
-  which reads as "perfectly determined" when the truth is the exact
-  opposite (e.g. `v_thk` with v_kovsoft = 0.1 V is fully saturated across a dataset
-  whose lowest v_gs is 2 V, so the kink transition is never sampled and
-  v_thk is unconstrained). The dead-column test is **relative** to the
-  strongest Jacobian column (1e-5 of it), not absolute: on the ST8L65
-  super-junction fit `v_sub`'s column measured 7.8e-7 of max — provably dead
-  (pinning it at 0.007/0.02/0.04/0.06/0.09 gives identical RMSE and
-  identical other parameters) — yet an absolute cutoff classified it live
-  and reported a confident σ_rel = 0.038, while also manufacturing a
-  spurious v_sub ↔ v_dbsat = +1.000 correlation and inflating cond by ~3 orders
-  of magnitude. 1e-5 sits in the empty gap between genuinely live columns
-  (~3e-4 of max: k_theta/gds/v_thk on the synthetic grid) and dead ones (~1e-6).
-  Rank, cond and correlations are computed over live columns only, so a
-  dead column can no longer fake a ±1.000 pair.
-- **`sensitivity_report`** (pre-fit): parameters sitting at their
-  non-negative lower bound (r_d, r_s at 0) get a one-sided absolute probe of
-  size `rel_step`, and the reported number is the mean *relative* i_d change
-  it produces. The log-space formula d ln i_d / d ln p is meaningless at
-  p = 0, and a two-sided probe would request negative resistance.
-
-### Synthetic data
-
-`make_synthetic` noise is multiplicative (datasheet curves are read off
-log-ish axes) and applied **without clipping** the values: flooring the
-current itself distorts the subthreshold points by up to 2× and makes the
-generator worse than the fit it is supposed to validate. Near-zero currents
-are handled where they belong — in the residual denominator (`i_d_floor` in
-`residuals`), not in the data.
-
-### CLI
-
-`--show` and `--out/-o` are registered on every subcommand with
-`argparse.SUPPRESS` defaults so they parse before *or* after the
-subcommand. Without SUPPRESS the subparser would reset them to its own
-defaults and clobber a value already parsed before the subcommand —
-argparse fills subparser defaults into the namespace unconditionally.
-
 ## Scope / not yet implemented
 
-This package is the **channel current plus package series resistance plus the
-body-diode DC branch plus the charge-master capacitance/charge model**
-(`caps.py` + `ltspice.py` nonlinear-cap delta subckt — see CAP_SPEC.md; the
-Q= ramp-sum export makes LTspice's symbolic dQ/dx exactly the sampled C
-staircase, so charge conservation is structural). The
-agreed architecture keeps the rest of the subcircuit as-is: split
-series R for channel/drift (intrinsic; the *package* r_d/r_s are now in the model
-itself), body-diode recovery charge Qrr (the static diode I–V is in; the
-reverse-recovery and HV-leakage elements are not), and the `Tj` node for
-Cauer-ladder co-simulation.
-Validation target remains double-pulse Eon/Eoff within ~10 %, which static
-fitting alone cannot deliver.
+In scope: channel current + package series R + body-diode DC branch +
+charge-master capacitance + behavioral recovery (LTspice-side).
+Open: $v_{gs}$-dependent $C_{gd}$ blend (the Miller-plateau deficit
+quantifies it: SJ +61 %, trench +22–43 %, SiC +10 %), full-device subckt
+channel B-source + kelvin wiring, HV leakage/BV element, $T_j$ thermal node,
+third-quadrant channel, recovery-parameter datasheet extraction protocol.
+Validation target: double-pulse Eon/Eoff within ~10 %, which static fitting
+alone cannot deliver.
 
 ## Prior art
 
-Hefner's physics-based MOSFET model, Infineon Level-100, Wolfspeed SiC models,
-and the Vayser / "Modelling Farmers" LTspice lineage.
+Hefner's physics-based MOSFET model, Infineon Level-100, Wolfspeed SiC
+models, and the Vayser / "Modelling Farmers" LTspice lineage.
