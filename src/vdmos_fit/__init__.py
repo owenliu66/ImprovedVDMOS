@@ -63,6 +63,7 @@ from .reference import (
     IMCQ120_JOINT_FREE,
     IMCQ120_JOINT_GROUP_RMSE_REL,
     IMCQ120_JOINT_RMSE_REL,
+    ISC040_RECOV,
     ST8L65_DIODE,
     ST8L65_DIODE_FREE,
     ST8L65_DIODE_RMSE_REL,
@@ -70,6 +71,7 @@ from .reference import (
     ST8L65_OFFICIAL,
     ST8L65_OFFICIAL_RMSE_REL,
     ImcqJointRecord,
+    RecovRecord,
 )
 
 __version__ = "0.1.0"
@@ -99,10 +101,12 @@ __all__ = [
     "IMCQ120_JOINT_GROUP_RMSE_REL",
     "IMCQ120_JOINT_RMSE_REL",
     "ImcqJointRecord",
+    "ISC040_RECOV",
     "LOG_PARAMS",
     "OriginAnchor",
     "Params",
     "QgCurveSet",
+    "RecovRecord",
     "ST8L65_DIODE",
     "ST8L65_DIODE_FREE",
     "ST8L65_DIODE_RMSE_REL",

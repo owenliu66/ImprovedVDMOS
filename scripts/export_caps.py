@@ -40,6 +40,11 @@ PARTS = {
     "ISC040N10NM8": CAP_ISC040,
 }
 
+# Parts whose measured C_ds charge-master lives inside the DiodeRecov
+# recovery subckt at Ki-A (out/<part>_recov.subckt): the caps delta must
+# export Cgs/Cgd ONLY, or C_oss is double-counted (session 23 decision).
+CGS_CGD_ONLY = {"ISC040N10NM8"}
+
 
 def main() -> None:
     out_dir = ROOT / "out"
@@ -48,7 +53,8 @@ def main() -> None:
         # re-splice at the extracted c_gdmax record (not the seed)
         model = CapModel(model.tables, model.anchor, params)
         path = write_cap_subckt(model, out_dir / f"{name}_caps.subckt",
-                                name=f"{name.lower()}_caps")
+                                name=f"{name.lower()}_caps",
+                                cgs_cgd_only=name in CGS_CGD_ONLY)
         qs = cap_charge_tables(model)
         sizes = {k: len(v) for k, (v, _) in qs.items()}
         spans = {k: (f"{v[0]:.1f}", f"{v[-1]:.1f}") for k, (v, _) in qs.items()}

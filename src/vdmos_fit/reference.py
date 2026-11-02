@@ -51,6 +51,8 @@ __all__ = [
     "CAP_ANCHOR_IMCQ120",
     "CAP_ANCHOR_ISC040",
     "CAP_PLATEAU_DEFICIT_REL",
+    "ISC040_RECOV",
+    "RecovRecord",
 ]
 
 # Free set of the promoted fit (order matters only for readability).
@@ -360,3 +362,61 @@ CAP_PLATEAU_DEFICIT_REL = {
     "IMCQ120R004M2H": 0.097,
     "ISC040N10NM8": 0.428,
 }
+
+
+# ---------------------------------------------------------------------------
+# Body-diode recovery (DiodeRecov, transit-time pole gauge) -- sessions
+# 25a-25c. LTspice-side netlist parameters (dimension-normalized, outside
+# the names.xlsx convention): knobs are tau / t_minor / t_pole; q_0 was
+# DELETED (pure gauge -- observables depend only on t_minor and
+# V_R/(q_0*tau)). Fit doctrine: intrinsic branch current I(x1:R2)
+# (datasheet Qrr excludes Q_oss; terminal path is contaminated ~28 nC at
+# 100 A/us), t_rr = 10 % of I_RM, no dTmax (the pole rounds the snap),
+# no .ic (DC op point IS the pre-event state), solver=alt method=gear
+# reltol=1e-4. Extraction: src/vdmos_fit/extract_recov.py (grid ->
+# log-log surrogates -> multi-start TRF polish, diff_step=0.03).
+# Report: out/recov_extract_isc040_run/extract_report.txt; records
+# out/RECOV_POLE_FIT.md + out/RECOV_INTRINSIC_FIT.md.
+#
+# IDENTIFIABILITY (fix-and-refit penalties, never marginal sigma):
+# t_pole sharply identified (x2/0.5 fix costs ~10-15 % RMS); tau is a
+# FLAT valley coupled to both other knobs (interior optimum ~3e-4,
+# analytic delay law d(Delta t)/d ln tau = -t_pole) -- quote the coupled
+# set + RMS, never tau alone. t_minor dominates Qrr.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RecovRecord:
+    """Official DiodeRecov recovery record (pole gauge).
+
+    targets/achieved: (di/dt [A/us], Qrr [nC], t_rr [ns]) -- intrinsic
+    path (q_rri/t_rri), t_rr = 10 % of I_RM. rms_rel: relative RMS over
+    ALL datasheet numbers."""
+    part: str
+    tau: float          # B2 snap threshold (dimension-normalized)
+    t_minor: float      # carrier storage lifetime [s] (= C1 farads, Roff=1)
+    t_pole: float       # transit/sweep-out pole R3*C3 [s] (R3 = 1 ohm)
+    k_chg: float        # forward-recovery branch (not identifiable here)
+    r_max: float        # forward-recovery branch (not identifiable here)
+    is_diode: float     # D1 DC branch (from the bench; diode.py protocol
+    rs_diode: float     #  refines it separately -- do not refit on
+    n_diode: float      #  recovery data)
+    rms_rel: float
+    targets: tuple
+    achieved: tuple
+
+
+ISC040_RECOV = RecovRecord(
+    part="ISC040N10NM8",
+    tau=3.7892757739719363e-4,
+    t_minor=2.2363459877611823e-8,
+    t_pole=8.32388859768649e-10,
+    k_chg=5.0,
+    r_max=0.0,
+    is_diode=1e-6,
+    rs_diode=10e-3,
+    n_diode=1.4,
+    rms_rel=0.011132,
+    targets=((1000.0, 247.0, 25.0), (100.0, 36.0, 29.0)),
+    achieved=((1000.0, 248.20, 24.687), (100.0, 35.710, 29.459)),
+)

@@ -279,64 +279,88 @@ delta (below), recovery is the network (below), BV/Ibv is a queue item.
 
 Recovery is a **behavioral LTspice network** (`DiodeRecov` subckt), not
 package Python — it lives in the export layer
-(`out/ISC040N10NM8_recov.subckt`, report `out/RECOV_REPORT.md`). D1 is the
-diode DC branch above (Rs externalized to R1 = 5 mΩ); the storage node q_j
-carries a capacitor $C_1 = q_0/\tau$ to ground, fed by the current source
-$B1 = -i_{R2}/\tau$ (proportional to diode current) and clamped $V_q \ge 0$ by
-a diode with $R_{off} = \tau$.
-
-**Dynamics (simulation-verified).** The $R_{off} = \tau$ leak closes the
-storage loop: forward steady state
-
-$$
-V_q \to I_F\ \text{[volts]}, \tau\text{-independent}; \qquad
-\text{time constant } R_{off} C_1 = q_0; \qquad
-Q_{stored} = C_1 V_q = \frac{q_0 I_F}{\tau} \propto I_F
-$$
-
-so the netlist is dimension-normalized: $q_0$ = 35 n doubles as C1's farad
-scale and the storage time constant in seconds (35 ns). Reverse recovery is
-the charge-controlled conductance
+(`out/ISC040N10NM8_recov.subckt`; records `out/RECOV_POLE_FIT.md`,
+`out/RECOV_INTRINSIC_FIT.md`, `out/RECOV_REPORT.md`; extraction driver
+`src/vdmos_fit/extract_recov.py`). D1 is the diode DC branch above; the
+storage node `q_j0` carries $C_1 = t_{\text{minor}}$ farads to ground
+(leak $R_{off} = 1$), fed by the injection mirror $B1 = -i_{R2}$ and
+clamped $V_{q0} \ge 0$ by ClampD. A unity buffer $E1$ + $R3 = 1\,\Omega$ +
+$C3 = t_{\text{pole}}$ inserts **one pole** — $v_{q_j} = v_{q0}$ filtered
+with time constant $t_{\text{pole}} = R3\,C3$ (no C1 loading) — and the
+conduction drive reads the FILTERED node:
 
 $$
-i_{rec} = \max\!\left[\frac{V_q\,(v_{Ki} - v_{Ai})}{\tau},\; 0\right]
+i_{rec} = \max\!\left[\frac{V_{q_j}\,(v_{Ki} - v_{Ai})}{\tau},\; 0\right]
 $$
 
-which carries the $-I_{RM}$ plateau (D1 itself is off, ~nA); the plateau ends
-when C1 (drained at $i_{rec}/\tau$ by B1) can no longer sustain
-$V_q (v_{Ki}-v_{Ai})/\tau = I_{RM}$:
+**Gauge (session 25b).** With $R_{off} = 1$, $C_1 = t_{\text{minor}}$:
+storage time constant $= t_{\text{minor}}$, $V_{q0,ss} = I_F$ volts,
+stored charge $= I_F\,t_{\text{minor}}$. $q_0$ is DELETED — observables
+depended only on $t_{\text{minor}}$ and $V_R/(q_0\tau)$; it was a pure
+gauge.
+
+**Three knobs:** $t_{\text{minor}}$ (carrier lifetime — stored charge and
+Qrr), $t_{\text{pole}}$ (transit/sweep-out memory — the pole makes
+$I_{RM}$ occur 1–2 ns **after** charge exhaustion and makes the Qrr
+di/dt-ratio tunable), and $\tau$ (B2 snap threshold). $\tau$ has a
+genuine **interior optimum ≈ 3e-4**: the clamp→$I_{RM}$ delay obeys
 
 $$
-V_q^{snap} \approx \frac{I_{RM}\,\tau}{V_R}
-\qquad\text{(predicted 1.25 V, observed 1.33 V on the fitted bench)}
+\Delta t = t_{\text{pole}}\,\ln\!\frac{V_{q_j}|_{\text{clamp}}}{V_{th}},
+\qquad V_{th} = \frac{I_{RM}\,\tau}{v_{Ki}-v_{Ai}},
+\qquad \frac{d\,\Delta t}{d\ln\tau} = -\,t_{\text{pole}}
 $$
 
-Forward recovery is a charge-controlled resistor in series:
+(verified to ~1 %), so shrinking $\tau$ adds tail time that must be paid
+by shortening $t_{\text{pole}}$ (sharply identified, wall below ~0.6 ns)
+and $t_{\text{minor}}$ — the minimum is where those costs balance.
 
-$$
-v_{B3} = -i_{R2}\left[\frac{r_{max}}{1 + k_{chg} V_q} + 1\,\mu\Omega\right]
-$$
+**Measurement doctrine (session 25a).** The datasheet Qrr excludes the
+$C_{oss}$ excursion, so fit the **intrinsic** branch current $i_{R2}$
+(which carries no C2 displacement current); terminal-path numbers differ
+by ≈ 28 nC at 100 A/µs and are reported for reference only.
 
-(0.1 Ω cold → 1.6 mΩ hot at $V_q = I_F$, decay constant $q_0$; the 1 µΩ floor
-breaks near-singular B3/R1/R2/switch loops in bridge topologies, < 0.1 %
-waveform impact).
+**Fitted on ISC040N10NM8** ($V_R = 50$ V, $I_F = 12.5$ A, 25 °C, both
+datasheet di/dt rows): $t_{\text{minor}} = 22.363$ n,
+$t_{\text{pole}} = 0.8324$ n, $\tau = 3.79\times 10^{-4}$ →
+**RMS 1.11 % over all four datasheet numbers** (1000 A/µs: Qrr 248.2 nC
++0.5 %, t_rr 24.69 ns −1.3 %; 100 A/µs: Qrr 35.71 nC −0.8 %, t_rr 29.46 ns
++1.6 %; t_rr = 10 % of $I_{RM}$, intrinsic path; record `ISC040_RECOV`). The two-knob model's
+Qrr-ratio floor (0.175 vs datasheet 0.146) is DEAD — the pole reproduces
+both di/dt rows from one physical state; the session-23 "Qrr rises with
+di/dt is unreproducible" verdict is superseded. $t_{\text{pole}}$ is
+**sharply identified** (fix-and-refit: 0.3 n → 15.6 %, 2 n → 11.6 %,
+8 n → 52.8 %, → 0 → 17.45 % RMS). Physical anchor:
+$L = \sqrt{2 D_a t_{\text{pole}}} = 1.4\text{–}2.7\ \mu$m for
+$D_a = 12\text{–}36$ cm²/s — a diffusive scale, right for the
+depletion-adjacent region of a 100 V SJ device, NOT a drift transit time.
+Falsifiable out-of-sample prediction at 300 A/µs: Qrr ≈ 104 nC,
+t_rr ≈ 29 ns, $I_{RM}$ ≈ 6.7 A.
 
-**Two knobs:** $q_0$ sets timing (Qrr, t_rr ≈ linear in $q_0$), $\tau$ sets
-shape (plateau→tail departure, snap hardness; Qrr nearly τ-independent).
-Fitted on ISC040N10NM8 (V_R = 50 V, I_F = 12.5 A, di/dt = 1000 A/µs, settled
-500-period bench): $q_0 = 35$ n, $\tau = 5$ → Qrr 249.6 nC (datasheet typ
-247, +1.1 %), t_rr 27.6 ns (typ 25, +10 %). No $(q_0, \tau)$ hits both: the
-datasheet's Qrr *rises* with di/dt (36 nC @ 100 A/µs → 247 nC @ 1000 A/µs),
-which no single stored-charge state follows — the fit is tuned to the
-hard-switching condition. Datasheet-driven extraction protocol: open
-(HANDOVER, next session).
+**Extraction protocol (session 25c, `extract_recov.py`).** One batched
+`.step param k` index sweep per di/dt point (mixed-radix decomposition —
+deterministic, no `.step` nesting ambiguity), log-log multilinear
+surrogates for (Qrr, t_rr), multi-start surrogate inverse solve, then TRF
+polish on real runs in log space with `diff_step = 0.03` (smaller steps
+put the cost difference below the simulator's own ~1e-4 relative
+measurement noise — the Jacobian goes noise-dominated and the fit stalls;
+measured), a generous step budget (tau is a flat valley coupled to both
+other knobs), tau free (≥ 1e-6), **no dTmax** (the pole rounds the snap:
+none/2.5n/1n/0.5n agree to ≤0.01 % and none is faster — the session-24
+"dTmax mandatory" finding was pole-free-era), **no `.ic`** (the DC
+operating point IS the pre-event state: no DC current in R3 ⇒
+$V_{q_j} = V_{q0}$), `solver=alt method=gear reltol=1e-4`.
+Identifiability by fix-and-refit penalties, never marginal σ.
 
-**Integration requirements** (LTspice 26.0.1, all verified):
-`method=gear reltol=1e-4` (trapezoidal rings on the snap); the measured C_ds
-charge-master sits **inside** the recovery branch at Ki–A (electrically D–S
-through B3+R1/R2, fc ≈ 3 GHz) and the caps delta exports Cgs/Cgd **only** —
-at the D–S terminals hard forward re-turn-on crashes (D1 has no Cjo), at
-Ki–Ai the network is singular.
+**Integration requirements** (LTspice 26.x, all verified):
+`method=gear reltol=1e-4` (trapezoidal rings on the snap); the measured
+C_ds charge-master sits **inside** the recovery branch at Ki–A
+(electrically D–S through B3+R1/R2, fc ≈ 3 GHz) — at the D–S terminals
+hard forward re-turn-on crashes (D1 has no Cjo), at Ki–Ai the network is
+singular; the caps delta therefore exports **Cgs/Cgd only**
+(`ltspice.py` `cgs_cgd_only=True`) — never export Cds in both places
+(double-counts C_oss); `R2 = 1 µΩ` + B3 `+1 µΩ` floor break
+near-singular B3/R1/R2/switch bridge loops (< 0.1 % waveform impact).
 
 ## Capacitance / charge (summary — full spec in CAP_SPEC.md)
 
@@ -380,9 +404,9 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth:
   (bigger = softer: `v_kovsoft`).
 - `m_triode` is the one carve-out: `vdmos_id_level1()` is a foreign-model
   adapter and keeping the model-card spelling `mtriode` *is* the mapping.
-- The recovery parameters (`q_0`, `tau`, `k_chg`, `r_max`) are deliberately
-  outside the convention — LTspice-side netlist values, dimension-normalized
-  (see the recovery section).
+- The recovery parameters (`t_minor`, `t_pole`, `tau`, `k_chg`, `r_max`) are
+  deliberately outside the convention — LTspice-side netlist values,
+  dimension-normalized (see the recovery section).
 
 ## Extraction
 
@@ -415,6 +439,7 @@ ImprovedVDMOS/
 │   ├── params.py           Params dataclass, bounds, log-space packing
 │   ├── data.py             CurveSet / DiodeCurveSet / CapCurveSet / QgCurveSet, CSV I/O
 │   ├── fit.py              least_squares extraction + identifiability (+ fit_diode)
+│   ├── extract_recov.py    datasheet → DiodeRecov extraction (LTspice-driven)
 │   ├── reference.py        official fitted device records
 │   ├── ltspice.py          LTspice export: charge-master nonlinear-cap subckt
 │   ├── plotting.py         output/transfer/gds/overlay plots

@@ -1,7 +1,18 @@
 # Project Status — ImprovedVDMOS
 
-*Snapshot: 2026-10-30 (session 23 — BODY-DIODE RECOVERY INTEGRATED + FITTED
-(ISC040N10NM8, LTspice-side only, NO package code touched): the user's
+*Snapshot: 2026-11-02 (sessions 25a–25c — RECOVERY REWORKED, LTspice-side:
+intrinsic (C_oss-free) `q_rri`/`t_rri` measurement doctrine adopted (datasheet
+Qrr excludes Q_oss); the `DiodeRecov` model gained the E1+R3+C3 TRANSIT-TIME
+POLE — q_0 deleted as a pure gauge, knobs are now t_minor / t_pole / tau;
+all four ISC040 datasheet recovery numbers fit to **RMS 1.11 %**
+(tau 3.79e-4, t_minor 22.363 n, t_pole 0.8324 n) — the session-23 "Qrr rises
+with di/dt is unreproducible" verdict is DEAD; the datasheet-driven extraction
+protocol LANDED as `src/vdmos_fit/extract_recov.py` (pole gauge:
+index-decomposed single `.step`, log-log surrogates, multi-start TRF polish
+with `diff_step=0.03`, no dTmax, tau free with interior optimum ~3e-4);
+durable records `out/RECOV_INTRINSIC_FIT.md` + `out/RECOV_POLE_FIT.md`.
+Before that, session 23 (2026-10-30) — BODY-DIODE RECOVERY INTEGRATED +
+FITTED (ISC040N10NM8, LTspice-side only, NO package code touched): the user's
 behavioral `DiodeRecov` network (charge-storage node q_j, charge-controlled
 B2 reverse-recovery source, B3 forward-recovery resistor) is now part of the
 full-device subckt template `out/ISC040N10NM8_recov.subckt` — the measured
@@ -10,8 +21,8 @@ placement crashes hard forward re-turn-on; Ki–Ai is singular), B3 +1 µΩ
 floor and R2 = 1 µΩ break near-singular bridge loops (<0.1 % waveform
 impact), `method=gear reltol=1e-4` required; two-knob fit **q_0 = 35 n,
 tau = 5** hits the datasheet 1000 A/µs recovery (Qrr 249.6 vs typ 247 nC,
-t_rr 27.6 vs 25 ns); report `out/RECOV_REPORT.md`; **NEXT SESSION: q_0/tau
-extraction protocol from datasheet info**. Before that, session 22
+t_rr 27.6 vs 25 ns — two-knob fit SUPERSEDED by the pole gauge above);
+report `out/RECOV_REPORT.md`. Before that, session 22
 (2026-10-29): KELVIN-AWARE r_s SPLIT LANDED + queue
 item 2 CLOSED BY EXPERIMENT: `Params.r_sk` (names.xlsx "sk") gives the
 Kelvin-aware package-R split `v_gs' = v_gs − (r_s − r_sk)·i_d` (gate loop
@@ -46,10 +57,13 @@ Companion to [README.md](../../README.md).*
 
 ## Current state
 
-Twenty-three sessions, committed to `main` (session 23 integrated + fitted
-the body-diode recovery network for ISC040N10NM8 — LTspice-side only, no
-package code touched; template `out/ISC040N10NM8_recov.subckt`, report
-`out/RECOV_REPORT.md`, session-23 section below; session 22 landed the Kelvin-aware
+Twenty-five sessions, committed to `main` (sessions 25a–25c reworked the
+body-diode recovery into the TRANSIT-TIME POLE gauge — intrinsic doctrine,
+q_0 deleted, RMS 1.12 % on all four ISC040 datasheet numbers — and landed
+the extraction protocol `src/vdmos_fit/extract_recov.py`, the record
+`ISC040_RECOV`, and the regenerated pole-gauge template
+`out/ISC040N10NM8_recov.subckt` — all LTspice-side; the session-23 section
+below keeps the integration decisions (its fit is superseded); session 22 landed the Kelvin-aware
 `r_sk` package-R split and closed HANDOVER queue item 2 by experiment — the
 IMCQ joint vector refit rejects gate-loop degeneration and proves the
 current-loop split DC-degenerate (session-22 section below); session 21
@@ -734,7 +748,9 @@ to re-pass through the same transfer curve).
   displacement current through r_sk), which is exactly the full-device
   subckt. DC record keeps r_s = r_sk = 0.
 
-## Body-diode recovery network — ISC040N10NM8 (session 23) — integrated + fitted, LTspice-side only
+## Body-diode recovery network — ISC040N10NM8 (session 23) — integrated, LTspice-side only
+**(the q_0/tau fit and the "unreproducible Qrr-vs-di/dt" verdict below are SUPERSEDED by
+sessions 25a–25c — see the next section; kept for the integration decisions, which stand)**
 
 The user's behavioral recovery model (`DiodeRecov` subckt; benches in the
 Strata workspace `outputs/vdmos_recov/`) is integrated into the full-device
@@ -805,6 +821,75 @@ only if the residual demands them).
 - DC diode params Is=1n N=1.4 Rs=5m → V_SD(25 A) = 0.91 V (datasheet typ
   0.82, max 1.0; Is ≈ 2.5 n would hit typ; q_0/tau insensitive).
 
+## Body-diode recovery — transit-time pole, intrinsic doctrine, extraction protocol (sessions 25a–25c)
+
+**Model reworked to the pole gauge; all four ISC040 datasheet recovery
+numbers fit to RMS 1.12 %; the datasheet-driven extraction protocol now
+exists as `src/vdmos_fit/extract_recov.py`. Durable records:
+`out/RECOV_INTRINSIC_FIT.md` (25a), `out/RECOV_POLE_FIT.md` (25b/25c),
+figure `out/RECOV_pole_fit.png`; bench `outputs/vdmos_recov/DiodeTest_pole.net`.**
+
+1. **Intrinsic doctrine (25a).** The datasheet Qrr does NOT include the
+   C_oss excursion: fit `q_rri`/`t_rri` measured on the INTRINSIC branch
+   current `I(x1:R2)` (C2 displacement bypasses R2 at node A). The terminal
+   path is contaminated by ≈28 nC / ≈15 ns at 100 A/µs — the intrinsic
+   measurement is what makes the low-di/dt datasheet point comparable at all.
+2. **Transit-time pole (25b, user's idea B).** `E1` (unity buffer) +
+   `R3 = 1 Ω` + `C3 = {t_pole}` between the storage node and the
+   conduction-driving node — an EXACT pole (no C1 loading) modelling finite
+   carrier transit/sweep-out memory. Gauge cleaned: `C1={t_minor}` +
+   `ClampD Roff=1` → storage τ = t_minor, V(q_j0)_ss = I_F volts, stored
+   charge = I_F·t_minor; **q_0 deleted (pure gauge)**. Mechanism verified on
+   raw: I_RM occurs 1–2 ns AFTER charge exhaustion (V(q_j) holds +0.29 V at
+   the q_j0 clamp instant, decays with exactly R3·C3); snap condition
+   `V(q_j) = I_RM·tau/ΔV` exact to all printed digits.
+   **The session-23 verdict "no single stored-charge state follows both
+   di/dt points" is DEAD**: the pole-free Qrr_lo/Qrr_hi floor (0.175
+   intrinsic; 0.30 terminal) was a model artifact — the datasheet ratio
+   0.146 is reachable through the pole.
+3. **Protocol + fitter (25c).** dTmax DROPPED (the pole rounds the snap:
+   none/2.5n/1n/0.5n agree to ≤0.01 % on q_rri/t_rri and none is FASTER —
+   4088 vs 8368 iterations at 100 A/µs; the "dTmax mandatory" finding was
+   pole-free-era). tau stays FREE: genuine interior minimum at ~3e-4
+   (analytic delay law Δt = t_pole·ln(V(q_j)|clamp/V_th),
+   V_th = I_RM·tau/ΔV, d(Δt)/d ln tau = −t_pole, verified to ~1 %).
+   Polish TRF in log space with `diff_step=0.03` (1e-4 puts cost
+   differences below the simulator's own ~1e-4 relative noise →
+   noise-dominated Jacobian, tau stalls at 0.119, RMS 5.57 %), generous
+   step budget (tau is a flat valley coupled to both other knobs), bounds
+   tau ≥ 1e-6. Single `.step param k` mixed-radix index sweep per di/dt
+   point (deterministic; kills the `.step` nesting gotcha). Chained
+   `{i_fi_min}` stepped-table gotcha RETRACTED (bookkeeping error; verified
+   working in `outputs/vdmos_recov/decomp.log`).
+
+**Official fit (ISC040N10NM8, V_R = 50 V, I_F = 12.5 A, 25 °C, intrinsic
+path, t_rr = 10 % of I_RM, record `ISC040_RECOV`):** tau = 3.789e-4,
+t_minor = 22.363 n, t_pole = 0.8324 n → Qrr 248.2 nC (+0.5 %) / t_rri
+24.69 ns (−1.3 %) @1000 A/µs; Qrr 35.71 nC (−0.8 %) / t_rri 29.46 ns
+(+1.6 %) @100 A/µs; **RMS 1.11 % over all four numbers** (17.45 %
+pole-free two-knob). Fix-and-refit penalties at the optimum
+(x0.5/x2 perturbations): tau +0.13/+0.08 pp (flat valley), t_minor
++9.6/+86 pp (dominant), t_pole +8.1/+5.4 pp (sharp).
+t_pole SHARPLY identified (fix-and-refit: 0.3 n → 15.6 %, 0.6 n → 10.8 %,
+2 n → 11.6 %, 4 n → 27.5 %, 8 n → 52.8 %, →0 → 17.45 %). Physical anchor:
+L = sqrt(2·D_a·t_pole) = 1.4–2.7 µm (diffusive scale, right for the
+depletion-adjacent region of a 100 V SJ device; NOT a drift transit time).
+Falsifiable out-of-sample prediction at 300 A/µs: Qrr ≈ 104 nC,
+t_rr ≈ 29 ns, I_RM ≈ 6.7 A (a real DPT discriminates against the ~90 nC
+power-law interpolation).
+
+**Extraction driver** `src/vdmos_fit/extract_recov.py` (pole gauge,
+`RecovSpec` per part): batched grid runs → log-log multilinear surrogates
+(Qrr, t_rr) per di/dt point → multi-start surrogate inverse solve → TRF
+polish on real runs → verification at every datasheet point (intrinsic +
+terminal-path reference numbers) → fix-and-refit identifiability →
+intrinsic-vs-terminal waveform plot. Report
+`out/recov_extract_isc040_run/extract_report.txt`, figure
+`out/RECOV_pole_extract_waveforms.png`. Official record `ISC040_RECOV` in
+`reference.py`, pinned by `tests/test_recov_record.py`. The subckt template
+`out/ISC040N10NM8_recov.subckt` is regenerated in the pole gauge — do NOT
+mix the old q_0/tau gauge with this one.
+
 ## Open problems
 
 1. **k_lambda / v_dbsat unsensed (σ = inf) in the official fit** — *accepted, not a
@@ -848,13 +933,16 @@ only if the residual demands them).
 - **Third-quadrant channel conduction** — channel is 0 for v_ds ≤ 0; a
   synchronous rectifier needs `sign(v_ds)·i_d(|v_ds|, v_gs)` (Queue item,
   out of scope session 12).
-- **Body-diode recovery — package-side state not built**: recovery now
-  exists as the behavioral LTspice network (session 23: `DiodeRecov`,
-  ISC040-fitted q_0/tau, template `out/ISC040N10NM8_recov.subckt`, report
-  `out/RECOV_REPORT.md`); junction charge is covered by the caps delta (the
-  Cds branch relocates into the recovery branch). Open: datasheet-driven
-  q_0/tau extraction protocol (**next session**), other parts, T_j
-  dependence, and whether it earns a `diode.py`/`reference.py` counterpart.
+- **Body-diode recovery — package-side state not built**: recovery exists
+  as the behavioral LTspice network in the pole gauge (sessions 25a–25c:
+  `DiodeRecov` + E1/R3/C3 transit-time pole, record `ISC040_RECOV` in
+  `reference.py`, template `out/ISC040N10NM8_recov.subckt`, extraction
+  protocol `src/vdmos_fit/extract_recov.py` — grid → log-log surrogates →
+  multi-start polish → fix-and-refit identifiability); junction charge is
+  covered by the caps delta (the Cds branch relocates into the recovery
+  branch). Open: other parts (need recovery datasheet specs), T_j
+  dependence, and whether it earns a `diode.py` counterpart (the
+  `reference.py` *_RECOV record landed).
 - **Q(V) charge model** — design settled AND LANDED 2026-10-18/21
   (Phases 1–4): see [`CAP_SPEC.md`](CAP_SPEC.md). `caps.py` builds
   charge-master LUTs

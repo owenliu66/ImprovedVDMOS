@@ -331,6 +331,18 @@ def test_export_subckt_structure():
     assert re.search(r"\d\.\d{9}[eE]?", txt)
 
 
+
+def test_export_cgs_cgd_only_flag():
+    """Cgs/Cgd-only export: parts whose Cds charge-master lives inside
+    the DiodeRecov recovery branch at Ki-A -- exporting Cds in both
+    places double-counts C_oss."""
+    m = _model_record("ISC040N10NM8")
+    txt = export_cap_subckt(m, "isc_caps", cgs_cgd_only=True)
+    assert "Cgs G S Q=" in txt and "Cgd G D Q=" in txt
+    assert "Cds D S" not in txt
+    assert "Cgs/Cgd ONLY" in txt          # header carries the warning
+    full = export_cap_subckt(m, "isc_caps")
+    assert "Cds D S Q=" in full           # default unchanged
 def _ltspice_exe() -> str | None:
     for name in ("LTspice", "ltspice"):
         found = shutil.which(name)

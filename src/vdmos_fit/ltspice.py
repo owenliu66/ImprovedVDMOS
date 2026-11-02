@@ -40,6 +40,11 @@ driving the delta with a voltage source Vxx gives I(Vxx) = -dq/dt.
 Parity is checked by driving each branch pair with PWL ramps and
 comparing I through the drive sources against the Python model
 (tests/test_caps.py, skipped when LTspice is not installed).
+
+``cgs_cgd_only=True`` omits the Cds branch: for parts whose measured C_ds
+charge-master lives INSIDE the DiodeRecov recovery subckt at Ki-A
+(session-23 integration decision), exporting Cds here too would DOUBLE
+COUNT the C_oss charge. Never export both copies.
 """
 
 from __future__ import annotations
@@ -152,9 +157,15 @@ def _wrap_netlist(prefix: str, expr: str, width: int = 90) -> str:
 
 
 def export_cap_subckt(
-    model: CapModel, name: str = "caps", *, n_sub: int = N_SUB
+    model: CapModel, name: str = "caps", *, n_sub: int = N_SUB,
+    cgs_cgd_only: bool = False,
 ) -> str:
-    """The three-capacitor delta as an LTspice .subckt (pins G D S)."""
+    """The three-capacitor delta as an LTspice .subckt (pins G D S).
+
+    cgs_cgd_only=True exports Cgs/Cgd only -- for parts whose measured Cds
+    charge-master lives inside the DiodeRecov recovery subckt at Ki-A;
+    exporting it in both places double-counts C_oss.
+    """
     qs = cap_charge_tables(model, n_sub=n_sub)
     p = model.params
     header = (
@@ -164,20 +175,28 @@ def export_cap_subckt(
         f"* charge-master nonlinear caps (Q= ramp-sum of sampled q(v);\n"
         f"* LTspice's symbolic dQ/dx gives a piecewise-CONSTANT C staircase,\n"
         f"* {n_sub} samples/digitised interval; end-segment slope = clamp-C policy)\n"
-        f".subckt {name} G D S\n"
     )
+    if cgs_cgd_only:
+        header += ("* Cgs/Cgd ONLY: the measured C_ds charge-master lives inside\n"
+                   "* the DiodeRecov recovery branch at Ki-A -- do NOT export\n"
+                   "* Cds here as well (double-counts C_oss).\n")
+    header += f".subckt {name} G D S\n"
     body = (
         _wrap_netlist("Cgs G S Q=", _rampsum_expr(*qs["gs"]))
         + _wrap_netlist("Cgd G D Q=", _rampsum_expr(*qs["gd"]))
-        + _wrap_netlist("Cds D S Q=", _rampsum_expr(*qs["ds"]))
     )
+    if not cgs_cgd_only:
+        body += _wrap_netlist("Cds D S Q=", _rampsum_expr(*qs["ds"]))
     return header + body + f".ends {name}\n"
 
 
 def write_cap_subckt(
-    model: CapModel, path: str | Path, name: str = "caps", *, n_sub: int = N_SUB
+    model: CapModel, path: str | Path, name: str = "caps",
+    *, n_sub: int = N_SUB, cgs_cgd_only: bool = False,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(export_cap_subckt(model, name, n_sub=n_sub), encoding="utf-8")
+    path.write_text(
+        export_cap_subckt(model, name, n_sub=n_sub, cgs_cgd_only=cgs_cgd_only),
+        encoding="utf-8")
     return path

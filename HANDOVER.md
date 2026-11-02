@@ -1,6 +1,427 @@
+# Handover — ImprovedVDMOS session 26: extract_recov.py REWRITE COMPLETE — POLE-GAUGE PROTOCOL LANDED END-TO-END
+
+**The session-25c "⚠️ START HERE: extract_recov.py IS BROKEN" warning is
+RESOLVED.** The rewrite is finished, verified against the bench, and the
+whole queue (items 1–5) is done except the ISC040 channel record (blocked
+on data — see below).
+
+## What landed this session (all verified)
+
+1. **`src/vdmos_fit/extract_recov.py` complete** (pole gauge): RecovSpec,
+   NETLIST_TMPL (brace bugs fixed; C3 ground node restored), single
+   `.step param k` mixed-radix index sweep, log-log multilinear
+   surrogates, multi-start surrogate solve, TRF polish (diff_step=0.03,
+   tau free ≥1e-6, no dTmax, no .ic), fix-and-refit identifiability at
+   PERTURBED values, terminal-path reference numbers, waveform plot.
+   VERIFIED FIRST as the handover demanded: rendered netlist is
+   structurally identical to `DiodeTest_pole.net` (only the intended
+   parameterization + t_rri25 addition), and a smoke run reproduces
+   q_rri 248.542 / t_rri 24.643 / I_RM 18.514 at (3e-4, 22.283n, 0.8201n).
+2. **Full ISC040 extraction** → optimum **tau = 3.78928e-4,
+   t_minor = 22.3635 n, t_pole = 0.832389 n, RMS 1.113 %**; three polish
+   starts (surrogate / best-grid / seed) all land in the same valley
+   (tau 3.79–3.94e-4). Report
+   `out/recov_extract_isc040_run/extract_report.txt` (identifiability
+   rerun appended), `extract_results.json`, figure
+   `out/RECOV_pole_extract_waveforms.png`.
+   Identifiability (fix knob at optimum ×0.5/×2, refit the other two):
+   tau +0.13/+0.08 pp (FLAT valley — quote the coupled set, never tau
+   alone); t_minor +9.6/+86 pp (dominant); t_pole +8.1/+5.4 pp (sharp).
+   NOTE: the 5×5×5 grid (125-step index sweep) takes ~10 min per di/dt
+   point, not the hoped 30 s — extreme tau corners (1e-5, B2 gm ~MS)
+   cost iterations. Surrogate max resid 8–18 % over the wide box; the
+   polish fixes it, but a tighter box or quadratic terms would speed a
+   cross-part reuse.
+3. **`reference.py`: `RecovRecord` + `ISC040_RECOV`** (tau
+   3.7892757739719363e-4, t_minor 2.2363459877611823e-8, t_pole
+   8.32388859768649e-10, rms_rel 0.011132; DC branch Is=1u Rs=10m
+   N=1.4; k_chg=5 r_max=0), exported from `vdmos_fit`, pinned by
+   `tests/test_recov_record.py` (4 tests; pins record values, pole-gauge
+   netlist structure — q_0 must never return, no dTmax, no .ic — and the
+   index-step decomposition; needs no LTspice run).
+4. **`out/ISC040N10NM8_recov.subckt` regenerated in the pole gauge** via
+   the new `scripts/gen_recov_subckt.py` (record-driven — never hand-edit
+   the subckt). VALIDATED: a standalone `.include` bench reproduces the
+   record exactly (q_rri 248.200 nC, t_rri 24.687 ns, I_RM 18.438 A).
+5. **`ltspice.py` `cgs_cgd_only=True` flag** + `scripts/export_caps.py`
+   `CGS_CGD_ONLY = {"ISC040N10NM8"}`; `out/ISC040N10NM8_caps.subckt`
+   regenerated Cgs/Cgd-only (Cds lives in the recovery branch — never
+   both). Test added (`test_export_cgs_cgd_only_flag`).
+6. **Docs**: README recovery section rewritten to the pole gauge (+
+   naming bullet `t_minor/t_pole/tau/k_chg/r_max`, + extract_recov.py in
+   the layout tree); STATUS.md snapshot + new "sessions 25a–25c" section
+   + Missing bullet + session-23 heading marked superseded (integration
+   decisions stand); stale gotchas corrected in `RECOV_INTRINSIC_FIT.md`
+   §4, `RECOV_POLE_FIT.md` §8, `RECOV_EXTRACTION_PROTOCOL.md` §2/§7, and
+   the 25a/25b/24 HANDOVER notes (chained `{i_fi_min}` stepped-table
+   claim RETRACTED; "dTmax mandatory" = pole-free era only).
+
+## Suite state
+
+Full pytest: 185 tests, ONE failure —
+`tests/test_caps.py::test_ltspice_caps_parity` point c1 at 0.32 % vs the
+2e-3 tolerance. **PRE-EXISTING**: reproduces identically with the
+untouched HEAD `ltspice.py` (verified by stash-test); the box upgraded
+LTspice 26.0.1 → 26.1.1 since the parity was pinned (session 22 log
+passes). Left untouched (out of scope) — investigate or re-baseline with
+evidence next session. Ruff clean on every touched file.
+
+## NEXT SESSION — remaining queue
+
+1. **ISC040 channel record — BLOCKED ON DATA**: `data/` has no ISC040
+   transfer/IV curves (only Cap_Vds, Vgs_Qg, cds_expr). Digitize a
+   transfer curve (curve_digitizer) first, then the standard
+   fit_datasheet protocol.
+2. `test_ltspice_caps_parity` c1 under LTspice 26.1.1: diagnose
+   (gear-integration vs `.meas FIND` timing artifact?) or re-baseline
+   the tolerance with evidence. STATUS parity record says ≤0.3 %; the
+   test pins 0.2 %.
+3. Unchanged optional physics follow-ups: two-section transit-time ladder
+   if the last 1–3 % of t_rr matters; out-of-sample DPT at 300 A/us
+   (model: Qrr ≈ 104 nC, t_rr ≈ 29 ns, I_RM ≈ 6.7 A vs ~90 nC power-law
+   interpolation); T_j dependence (no data — do not invent a TC law);
+   cross-part check if ST8L65/IMCQ datasheets carry recovery specs;
+   B2 `1/tau` → explicit stiff gate.
+4. k_chg/r_max stay fixed (not identifiable from recovery data). The
+   ISC040 D1 DC branch is the bench set (Is=1u, Rs=10m, N=1.4), NOT the
+   diode.py record path — refine separately against V_SD specs if that
+   matters (session 23 noted q_0/tau-insensitivity of V_SD).
+5. Extraction cost: consider a tighter grid box (tau lo 1e-5 → ~3e-5
+   still brackets the 3.8e-4 optimum with margin) or part-to-part
+   surrogate seeding if running other parts.
+
+---
+
+# Handover — ImprovedVDMOS session 25c: dTmax DROPPED, FITTER FIXED, DRIVER REWRITE IN PROGRESS
+
+## ⚠️ START HERE: `src/vdmos_fit/extract_recov.py` IS BROKEN / INCOMPLETE
+
+Session 25c was mid-rewrite when the context window ran out. The file now
+contains a valid docstring + `RecovSpec` dataclass + `NETLIST_TMPL` +
+`find_ltspice()` + `_cds_clause()` + `_spice_num()`, then a **broken stub**
+at the end:
+
+```python
+def make_netlist(spec: Spec := None, *, didt: float, steps: str = "",
+                 label: str = "bench", **kw) -> str:
+    raise TypeError("use make_netlist(spec, didt=...)")
+```
+
+`Spec` does not exist (the dataclass is `RecovSpec`) and `spec: Spec := None`
+is a syntax error — **the module will not import.** Everything after
+`_spice_num()` (netlist builder, index-step emitter, log parser, surrogates,
+inverse solve, polish, identifiability, plotting, `extract()` entry point)
+was never written. The old session-24 implementation is recoverable from
+git (`git show HEAD:src/vdmos_fit/extract_recov.py`) — it is the two-knob/
+t_minor-gauge version with the obsolete `Vv`/`D5`/`.ic` bench and `I(R4)`
+plot references, so use it for structure only, not for topology.
+
+**The `NETLIST_TMPL` in the new file has NEVER been executed.** It was
+written from the verified scratch bench (`outputs/vdmos_recov/
+DiodeTest_pole.net`) but the `{{`/`{{{{` brace-doubling for `.format()` is
+UNTESTED — e.g. `PULSE({{-i_test}} {{{{i_test*9}}}} ...)` renders as
+`{{i_test*9}}` (double braces) which is wrong for a single-pass format.
+First action next session: render the template, diff it against
+`DiodeTest_pole.net`, and run it before trusting anything.
+
+## What session 25c established (all measured — do not re-derive)
+
+User asked three things: (a) why didn't the fitter reach tau=3e-4, (b) tau
+must stay free because 3e-4 is device-specific, (c) dTmax is no longer
+needed since reltol=1e-4 forces small steps. Then asked to update
+`extract_recov.py`, `README.md`, `STATUS.md`. **README.md and STATUS.md are
+NOT yet updated — still pending.**
+
+### (c) dTmax is genuinely unnecessary now — user is right
+
+At the optimum (tau=3e-4, t_minor=22.283 n, t_pole=0.8201 n), 1000 and
+100 A/us, vs a dTmax=0.2 n reference:
+
+| dTmax | q_rri err | t_rri err | iters (100 A/us) |
+|---|---|---|---|
+| none | +0.01 % | +0.01 % | 4088 |
+| 2.5 n | +0.01 % | +0.00 % | 2788 |
+| 1.0 n | +0.01 % | +0.00 % | 4825 |
+| 0.5 n | +0.01 % | −0.01 % | 8368 |
+
+All agree to ≤0.01 %, and **dropping dTmax is FASTER** (4088 iters vs 8368
+at 0.5 n). The session-24 "dTmax mandatory" finding belonged to the
+**pole-free** model, where the snap was a hard discontinuity; the pole
+rounds it and the adaptive controller resolves it. New benches: no dTmax.
+
+### (a)+(b) the fitter CAN find tau — my session-25b "fix tau" advice was wrong
+
+With the tau bound extended to 1e-5 and `max_nfev=200`, TRF from seed
+(tau0=0.1, tm0=17 n, tp0=2 n) reaches **tau=3.982e-4, t_minor=22.361 n,
+t_pole=0.8372 n, RMS 1.119 %** (nfev=51, status=3). So tau does not need
+fixing — the earlier stall was a too-small step budget + bound, exactly as
+the user's Newton intuition said. **tau stays a free knob** (device-specific
+optimum, user is right).
+
+Refined optimum: **tau ≈ 3.98e-4, t_minor ≈ 22.36 n, t_pole ≈ 0.837 n,
+RMS 1.119 %** (profile-fit reference: 3e-4 / 22.283 n / 0.8201 n, 1.122 %).
+
+### Finite-difference step: bigger is better here (counterintuitive, measured)
+
+`probe_fitter.py` configs from seed s1:
+
+| config | result |
+|---|---|
+| A trf, diff_step=0.03, x_scale=jac, max_nfev=200 | **tau 3.98e-4, RMS 1.119 %** ✓ |
+| B trf, diff_step=1e-4, ftol=xtol=gtol=1e-12 | tau stuck 1.185e-1, **RMS 5.566 %** ✗ |
+| C trf, x_scale="log" | **ValueError** — scipy `least_squares` accepts only `'jac'` or array_like; configs C/D/E never ran |
+
+Reason: with diff_step=1e-4 the cost differences (~1e-6) fall **below the
+simulator's own measurement noise** (~1e-4 relative on q_rri/t_rri), so the
+Jacobian is noise-dominated. diff_step=0.03 puts the cost difference ~1e-2,
+far above noise. **Tighter tolerances do not help for the same reason.**
+Driver default: `diff_step=0.03`, generous `max_nfev`, bounds tau ≥1e-6.
+
+### My dTmax-noise hypothesis was WRONG (recorded so it isn't re-tried)
+
+Cost-surface roughness along a 13-point log t_minor sweep (RMS of 2nd
+differences, normalized): dTmax=2.5 n → 0.1181 %, dTmax=none → 0.1174 %
+(1000 A/us); 0.3363 % vs 0.3355 % (100 A/us). **Identical** — dTmax does not
+roughen the cost surface. The session-25b stall was path-dependence in a
+flat valley + small step budget, nothing else.
+
+### CORRECTION to a session-25a gotcha (it was my bookkeeping error)
+
+Chained `{i_fi_min}` measurements **DO work in stepped runs.** A fresh
+stepped test emitted both `t_rri` (23.915/23.525/24.901/24.509 ns) and
+`t_rri25` (23.123/22.559/24.118/23.560 ns) as full 4-row blocks. The
+session-25a "dependent block dropped from stepped tables" claim came from a
+netlist that **never contained a `t_rri25` line** (verified:
+`grid_hi.net`/`grid_lo.net` → "netlist has t_rri25 line: False"). Delete
+that gotcha from `RECOV_INTRINSIC_FIT.md` §4 and the 25a/25b handover
+notes. `t_rri` vs `t_rri25` differ by ~0.8 ns at these settings.
+
+### Verified driver building blocks (use these, they work)
+
+- **Single index sweep with mixed-radix decomposition** — removes the
+  `.step` nesting gotcha entirely and is deterministic:
+  ```
+  .step param k list 0 1 2 3 4 5 6 7 8
+  .param nA=mod(k,3)
+  .param nB=int(k/3)
+  .param tau_p=exp(ln(1e-4)+nA*ln(3))
+  .param tm_p=exp(ln(20n)+nB*ln(1.1))
+  .param tp_p=0.8201n
+  ```
+  Global step params DO drive values **inside** the subckt including the
+  `C3 q_j {tp_p}` value (rc 0, values respond). GOTCHA: every referenced
+  param must be defined or LTspice dies at parse with
+  `No such parameter defined.` pointing at `C3 q_j 0 {tp_p}` (rc 1, no
+  measurements at all).
+- **`plotwinsize=0` changes nothing** on these `.meas` results (identical to
+  6 digits: q_rri 248.5420, t_rri 24.64342, I_RM 18.51401) — optional, not
+  needed for measurement accuracy here.
+- Bench runs from the DC operating point with **no `.ic`** (no DC current in
+  R3 ⇒ V(q_j)=V(q_j0)); `solver=alt` + `method=gear reltol=1e-4`; tstop
+  `{tr*5+50n}`; run time 0.13–0.20 s per point.
+
+## Files this session
+
+- `outputs/vdmos_recov/probe_tau_bound.{py,log}` — tau valley profile
+  (fix tau, refit the other two): tau 2e-2/3e-3/1e-3/**3e-4**/1e-4/3e-5/1e-5
+  → RMS 3.12/1.78/1.27/**1.12**/1.57/2.74/3.41 %; interior minimum at
+  ~3e-4, degrades below. Analytic law verified to ~1 %:
+  `Δt(clamp→I_RM) = t_pole·ln(V(q_j)|clamp / V_th)`, `V_th = I_RM·tau/ΔV`,
+  so `d(Δt)/d(ln tau) = −t_pole` (measured 1.15/3.22/5.67 ns vs analytic
+  1.15/3.25/5.76 ns at tau 2e-2/3e-4/1e-5). Not numerical: 1534/1451/1740
+  iterations, B2 gm up to 1.25 MS stays solvable.
+- `outputs/vdmos_recov/probe_fitter.{py,log}` — fitter config study (A/B ran;
+  C crashed on invalid `x_scale="log"`; D lm and E profile+refine never ran —
+  worth finishing, E is the robust route if TRF proves seed-sensitive).
+- `outputs/vdmos_recov/fit_pole.py` — bounds fixed (tau ≥1e-5, diff_step
+  0.01, max_nfev 200, prints `status`/`active_mask`). NOTE: its
+  `diff_step=0.01` is now known to be sub-optimal vs 0.03 (see above).
+- `out/RECOV_POLE_FIT.md` §4b added (tau interior minimum + correction of
+  §4's "saturating toward tau→0" wording + fitter guidance). §4 and the
+  HANDOVER 25b bullet still say "fix tau" — **now superseded by this
+  section; needs correcting.**
+
+## NEXT SESSION — ordered
+
+1. **Fix `extract_recov.py`** (it does not import). Finish the rewrite in the
+   pole gauge: `RecovSpec` (per-part datasheet points + grid + bounds),
+   index-decomposed single `.step`, no dTmax, no `.ic`, intrinsic
+   `q_rri`/`t_rri` doctrine, log-log surrogates, multi-start surrogate solve,
+   polish with `diff_step=0.03` + generous budget + tau free (≥1e-6),
+   fix-and-refit identifiability, terminal-path reference numbers, waveform
+   plot. Verify the template renders to the working bench before anything else.
+2. **README.md** — the recovery section is stale (still describes the
+   two-knob `C1=q_0/tau`, `Roff=tau`, `q_0`/`tau` model, "Two knobs", the
+   35 n/5 fit, and "Datasheet-driven extraction protocol: open"). Must be
+   rewritten to the pole gauge: `C1={t_minor}`, `Roff=1`, `E1`+`R3`+`C3`
+   pole, three free knobs (t_minor, t_pole, tau), q_0 deleted as a gauge,
+   snap condition `V(q_j)=I_RM·tau/ΔV`, the Δt law, and the ISC040 result
+   (tau 3.98e-4, t_minor 22.36 n, t_pole 0.837 n, RMS 1.12 % on all four
+   datasheet numbers). Also the naming-convention bullet lists recovery
+   params as (`q_0`, `tau`, `k_chg`, `r_max`) — must become
+   (`t_minor`, `t_pole`, `tau`, `k_chg`, `r_max`).
+3. **STATUS.md** — add a session-25c section after the session-23 recovery
+   section (which is now stale: it documents q_0/tau semantics, the
+   35 n/5 fit, and the "Qrr rises with di/dt is unreproducible" verdict —
+   that verdict is DEAD, the pole reproduces both di/dt points). Update the
+   "Missing" bullet on body-diode recovery (extraction protocol now exists).
+4. Correct the stale gotchas: delete the "chained `{i_fi_min}` dropped in
+   stepped tables" claim (25a §4 + 25b notes); mark "dTmax mandatory"
+   (24 §2/§7) as pole-free-era only.
+5. Then the unchanged queue: regenerate `out/ISC040N10NM8_recov.subckt` in
+   the pole gauge; `reference.py` `*_RECOV` record + pinned test; `ltspice.py`
+   Cgs/Cgd-only export flag; ISC040 channel record.
+6. Optional physics follow-ups (unevaluated): two-section transit-time ladder
+   if the last 1–3 % of t_rr matters; out-of-sample check at 300 A/us
+   (model predicts Qrr ≈104 nC, t_rr ≈29 ns, I_RM ≈6.7 A — a real DPT
+   measurement would discriminate against the ~90 nC power-law interpolation).
+
+---
+
+# Handover — ImprovedVDMOS session 25b: TRANSIT-TIME POLE (idea B) — FIT SOLVED
+
+## NEXT SESSION = ADOPT THE 2-KNOB PROTOCOL + REGENERATE THE TEMPLATE
+
+User's idea B landed and WORKS: an RC pole between the storage node and the
+conduction-driving node models the finite carrier transit/sweep-out time.
+Bench adopted as `outputs/vdmos_recov/DiodeTest_pole.net` (user's netlist,
+`solver=alt`). Durable record: `out/RECOV_POLE_FIT.md` + `out/RECOV_pole_fit.png`.
+
+**Headline: RMS relative error over all four datasheet numbers**
+(no pole: 17.45 %) -> (pole, 3-knob: 3.20 %) -> (pole, tau FIXED at the
+stiff limit, only 2 fitted knobs: **1.12 %**).
+The Qrr-ratio problem is DEAD: the pole-free model's 0.175 floor (0.30 in
+the old terminal gauge) vs datasheet 0.146 is now tunable through — the
+hi-priority weighting hits BOTH Qrr rows to 0.3 %.
+
+**Recommended parameterization / extraction protocol (supersedes 25a):**
+- `C1={t_minor}`, `ClampD Roff=1` -> storage tau = t_minor, V_q0,ss = I_F,
+  stored charge = I_F·t_minor. **q_0 deleted (it was a pure gauge).**
+- `E1` unity buffer + `R3`+`C3` -> EXACT pole tau_p = R3·C3 (no C1 loading).
+- **tau: interior minimum at ~3e-4, NOT a monotone approach to the stiff
+  limit.** Earlier wording ("saturating toward tau->0") was WRONG and is
+  corrected in `RECOV_POLE_FIT.md` sec. 4b. Valley profile (tau fixed,
+  other two refit): tau 2e-2/3e-3/1e-3/**3e-4**/1e-4/3e-5/1e-5 ->
+  RMS 3.12/1.78/1.27/**1.12**/1.57/2.74/3.41 %. Degrades below 3e-4, so
+  3e-4 is a genuine optimum, not an arbitrary stopping point.
+  Reason (analytic, verified to 1 %): the clamp->I_RM delay is
+  dt = tau_p*ln(V(q_j)|clamp / V_th) with V_th = I_RM*tau/(V_Ki-V_Ai), so
+  d(dt)/d(ln tau) = -tau_p — shrinking tau ADDS tail time that must be paid
+  by shortening tau_p (sharply identified, wall below ~0.6 n) and t_minor
+  (off ~22 n costs the Qrr ratio). Minimum = where those costs balance.
+  Not numerical: 1534/1451/1740 iterations at tau 2e-2/3e-4/1e-5, no
+  convergence trouble, B2 gm up to 1.25 MS stays solvable.
+- **FITTED BOUNDS GOTCHA:** `fit_pole.py` originally had `tau >= 0.02` and
+  seedA converged to `tau=0.020000009` — pinned at the bound, costing ~2 %
+  RMS. Bounds now extended to 1e-5 (diff_step 0.01, max_nfev 200). With
+  bounds fixed, the 3-knob fit descends but terminates `status=3` (ftol) at
+  seed-dependent tau (1.28e-3/4.35e-3/1.74e-3, RMS 1.38/2.00/1.51 %) — the
+  tau valley is flat and coupled to BOTH other knobs, so coordinate-wise
+  finite differences stop short of the bottom. **Treat status==3 as not
+  converged; prefer fixing tau=3e-4 and fitting two knobs.**
+- Fit exactly TWO physical knobs: **t_minor = 22.283 n** (carrier lifetime)
+  and **t_pole = 0.8201 n** (sweep-out memory) at tau=3e-4 ->
+  Qrr 248.5 (+0.6 %), t_rr 24.64 (−1.4 %) @1000 A/us;
+  Qrr 35.7 (−0.8 %), t_rr 29.42 (+1.4 %) @100 A/us.
+- t_pole is SHARPLY identified (fix-and-refit: 0.3 n->15.6 %, 0.6 n->10.8 %,
+  optimum->1-3 %, 2 n->11.6 %, 4 n->27.5 %, 8 n->52.8 %, ->0 = 17.45 %).
+
+**Mechanism (verified on raw):** q_j0 clamps to 0 at 54.6 ns (hi) / 399.4 ns
+(lo); at that instant V(q_j) still holds +0.29 V / +0.12 V and then decays
+with 1.17 ns = R3·C3 exactly. So **I_RM occurs ~1-2 ns AFTER charge
+exhaustion** — the transit-memory signature. Snap condition verified exact:
+V(q_j)·(V_Ki−V_Ai)/tau = 17.79 A = I_RM (17.76 A); B2 carries the plateau
+(I(D1) ~ −1 uA).
+**Physical anchor:** t_pole ~0.8-1.2 n is diffusive — L = sqrt(2·D_a·t_pole)
+= 1.4-2.7 um (D_a 12-36 cm^2/s), the right scale for the depletion-adjacent
+region of a 100 V SJ device. Drift at v_sat would cover 82-98 um, so it is
+NOT a drift-transit time. Do not over-interpret.
+**Out-of-sample prediction (falsifiable):** at 300 A/us the model predicts
+Qrr ~104 nC, t_rr ~29 ns, I_RM ~6.7 A (t_rr nearly constant 29.9/28.9/25.0 ns
+at 100/300/1000). A power-law interpolation of the two datasheet rows gives
+~90 nC -> model ~15 % high; discriminate with a real DPT at 300 A/us.
+
+**Next session:**
+1. Regenerate `out/ISC040N10NM8_recov.subckt` in the pole gauge with the
+   recommended set (tau fixed, t_minor/t_pole fitted). Do NOT mix gauges.
+2. If the last 1-3 % of t_rr matters: upgrade the single pole to a
+   **two-section transit-time ladder** (a distributed drift region gives a
+   pole chain, not one pole) — adds phase lag without changing DC gain,
+   which is what the residual t_lo bias wants.
+3. Consider replacing B2's `1/tau` with an explicit stiff gate: the model is
+   converging to an ideal switch controlled by the filtered charge node.
+4. Do NOT add di/dt-dependent q_0/tau laws — the pole already produces the
+   Qrr-rises-with-di/dt behavior from one physical state.
+5. Then the session-24 queue (reference.py `*_RECOV` record, ltspice.py
+   Cgs/Cgd-only export flag, ISC040 channel record) unchanged.
+
+**Gotchas added this session** (full list in `RECOV_POLE_FIT.md` §8): the
+pole does not break `.ic`-free DC-op-point seeding (no DC current in R3 ->
+V(q_j)=V(q_j0)); ~~forward-referenced `i_fi_min` resolves in single runs but
+chained dependent `.meas` blocks are still dropped in `.step` tables~~
+(CORRECTED in 25c: chained blocks DO work in stepped runs — bookkeeping
+error); user extended tstop to `{tr*5+50n}` for the longer tail.
+
+---
+
+# Handover — ImprovedVDMOS session 25: INTRINSIC (C_oss-free) RECOVERY MEASUREMENT + REFIT
+
+## (Superseded by session 25b — the pole model replaces the 3-knob no-pole fit; kept for history)
+
+Session 25 adopted the user's updated DiodeTest netlist
+(`outputs/vdmos_recov/DiodeTest_user.net`: Tau removed where unnecessary,
+R4 removed, `ClampD Roff=t_minor/q_0`, `C1={q_0}`, `B1=-I(R2)`, B3 off,
+C2 charge-master) and refit recovery per the C_oss-contamination decision
+(datasheet Qrr does NOT include Q_oss → fit `q_rri`/`t_rri` measured on the
+intrinsic branch `I(x1:R2)`; C2 displacement bypasses R2 at node A).
+Durable record: `out/RECOV_INTRINSIC_FIT.md` + `out/RECOV_intrinsic_waveforms.png`.
+
+**Key session-25 findings (do not re-derive):**
+- New parameterization semantics (sim-verified): storage τ = t_minor
+  (Roff·C1, tau-free), V_q,ss = I_F·t_minor/q_0, stored charge = I_F·t_minor;
+  tau is a pure B2 gain/snap-shape knob. Model-line instance-param scoping
+  (`Roff=t_minor/q_0`) works in 26.1.1.
+- Bench runs from DC op point, no `.ic` seed, 0.13 s; loop di/dt = didt exactly.
+- q_0 NOT identifiable (<2 % over 30–55 n) — fix 41.1 n. t_minor dominates
+  Qrr and t_rr; tau stretches t_rr and softens the snap.
+- Qrr_lo/Qrr_hi ratio floor now ≈0.175 at t_minor=20 n (was 0.30 terminal-path);
+  datasheet 0.146 still unreachable at the tm≈36 n that Qrr_hi=247 requires
+  (ratio ≈0.24 there).
+- Fits (targets 247 nC/25 ns + 36 nC/29 ns, equal relative weights unless
+  noted): seed (0.1, 30 n) → hi −21 %/−21 %, lo +21 %/+1 %; equal (0.584,
+  29.4 n) → hi −24 %/−17 %, lo +12 %/+10 %; hi-prio (0.939, 36.3 n) →
+  hi +0.0 %/−4 %, lo +70 %/+35 %. **Recommend hi-prio set for the
+  hard-switching record.**
+- C_oss contamination at 100 A/µs ≈28 nC / ≈15 ns on the terminal path —
+  the intrinsic measurement is what makes the lo point comparable at all.
+
+**Next session ideas:**
+1. Regenerate `out/ISC040N10NM8_recov.subckt` from the user's new subckt
+   semantics + chosen fit set (template still carries the old two-knob
+   `Roff={tau}`/`C1={q_0/tau}` form — do NOT mix the two parameterizations).
+2. t_rr definition check: datasheet t_rr likely IEC t_rr25; user's t_rri is
+   10 % of I_RM. At tau≈0.9 the snap is soft enough that the 10 %/25 %
+   split is ~1 ns — decide the canonical definition and refit if needed.
+3. Structural route to the residual Qrr_lo tension remains a second storage
+   state (dual lifetime); the ratio-floor numbers above bound what a
+   single-state model can do.
+4. Then the session-24 queue items (reference.py `*_RECOV` record, ltspice.py
+   Cgs/Cgd-only export flag, ISC040 channel record) unchanged.
+
+**Gotchas added this session** (full list in `RECOV_INTRINSIC_FIT.md` §4):
+`.tran` dTmax is the FOURTH positional arg (2nd position silently rebinds
+Tstop → `No. Points: 0` + "Unexpected file format"); `.meas` INTEG log
+values already carry the `*1e9` (nC) — don't rescale; ~~chained `{i_f_min}`
+measurements are dropped from stepped-run log tables~~ (CORRECTED in 25c:
+they DO work — the claim came from a netlist that never had the line); log
+value = token before `FROM` then `split("=")[-1]`; event windows anchor on
+the FIRST falling zero-crossing of `Ix(x1:a)`.
+
+---
+
 # Handover — ImprovedVDMOS session 24: RECOVERY DATASHEET EXTRACTION PROTOCOL + t_minor KNOB
 
-## NEXT SESSION = IMPROVE THE RECOVERY FIT FURTHER
+## (Superseded by session 25 — intrinsic-path doctrine; kept for history)
 
 Session 24 built the datasheet-driven extraction pipeline
 (`src/vdmos_fit/extract_recov.py`, `extract()` two-knob + `extract3k()`
@@ -48,7 +469,8 @@ unchanged in STATUS.md.
 **Gotchas added this session** (full list in protocol §7): ASCII raw parse
 (index line + one value per line; column k = variable k); single-value
 `.step` rejected; `.step` nesting last=outer; failed `.meas` rows print
-`failed`; dTmax mandatory; `V(X1:node)` unquoted in `.ic`/`.meas`.
+`failed`; ~~dTmax mandatory~~ (superseded for the pole model, 25c: no dTmax
+needed — pole-free era only); `V(X1:node)` unquoted in `.ic`/`.meas`.
 
 ---
 
