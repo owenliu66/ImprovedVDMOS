@@ -83,10 +83,21 @@ def test_off_sentinel_bit_identical():
     assert np.array_equal(ref, vdmos_id(VD, VG, pkg))
 
 
-def test_channel_clamped_zero_for_negative_vds():
-    """v_ds <= 0 with the diode off -> exactly zero (no garbage channel tail)."""
-    out = vdmos_id(np.linspace(-20.0, -0.01, 25), np.linspace(-2, 16, 25), DEFAULT)
-    assert np.all(out == 0.0)
+def test_reverse_channel_is_exact_mirror():
+    """Third-quadrant channel (session 29, synchronous rectification): with
+    the diode off, i_d(v_ds < 0) = -i_d(|v_ds|) EXACTLY (sign-symmetric
+    mirror, package-R solve runs on the magnitudes), and only the negligible
+    softplus tail below threshold. Accepted limitation: the mirror cannot
+    capture V_gs modulation of the diode forward drop -- the Si channel
+    takes over before that discrepancy matters; SiC negative-drive / GaN
+    (no body diode) rely on the channel itself."""
+    vd = np.linspace(0.01, 20.0, 25)
+    vg = np.linspace(-2.0, 16.0, 25)
+    assert np.array_equal(vdmos_id(-vd, vg, DEFAULT), -vdmos_id(vd, vg, DEFAULT))
+    pkg = DEFAULT.replace(r_d=2e-3, r_s=1e-3)
+    assert np.array_equal(vdmos_id(-vd, vg, pkg), -vdmos_id(vd, vg, pkg))
+    off = vdmos_id(np.linspace(-20.0, -0.01, 25), np.full(25, -2.0), DEFAULT)
+    assert np.all(np.abs(off) < 1e-24)   # softplus tail only, no garbage
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +303,19 @@ def test_tc_extrapolation_guard():
 # Integration into vdmos_id
 # ---------------------------------------------------------------------------
 
-def test_reverse_polarity_carried_by_diode():
-    """vdmos_id(v_ds < 0) == -vdmos_diode(-v_ds), independent of v_gs."""
-    for v_gs in (-2.0, 0.0, 10.0):
+def test_reverse_polarity_diode_plus_mirror_channel():
+    """v_ds < 0: terminal diode branch + mirror-symmetric channel in
+    PARALLEL (real-device topology). Below threshold the channel tail is
+    negligible -> diode-only; above threshold the channel dominates
+    (synchronous rectification, session 29)."""
+    for v_gs in (-2.0, 0.0):
         lhs = vdmos_id(-0.8, v_gs, P_ON)
         rhs = -vdmos_diode(0.8, P_ON)
-        assert lhs == pytest.approx(rhs, rel=1e-12)
+        assert lhs == pytest.approx(rhs, rel=1e-9)
+    ch = float(_channel_current(np.array(0.8), np.array(10.0), P_ON))
+    lhs = float(vdmos_id(-0.8, 10.0, P_ON))
+    rhs = -ch - float(vdmos_diode(0.8, P_ON))
+    assert lhs == pytest.approx(rhs, rel=1e-9)
 
 
 def test_forward_floor_is_diode_reverse_saturation():

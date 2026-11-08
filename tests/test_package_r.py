@@ -137,9 +137,9 @@ def test_level1_package_embedding_fair_comparison():
 
 # ---------------------------------------------------------------- guards
 def test_negative_vds_channel_solver_still_guarded():
-    """The channel solver keeps its v_ds >= 0 guard -- but vdmos_id no longer
-    needs it: the body diode (session 12) defines the reverse characteristic.
-    vdmos_id_level1 (no diode) still fails loudly.
+    """The channel solver keeps its v_ds >= 0 guard -- vdmos_id feeds it the
+    |v_ds| magnitudes and mirrors the sign (session 29 third-quadrant
+    conduction). vdmos_id_level1 (no diode, no mirror) still fails loudly.
     """
     from vdmos_fit.model import _channel_current, _solve_package_r
 

@@ -51,6 +51,7 @@ from vdmos_fit import (
     ISC040_DIODE,
     ISC040_DIODE_GROUP_RMSE_REL,
     ISC040_DIODE_RMSE_REL,
+    ISC040_RECOV,
     load_csv,
     vdmos_diode,
     vdmos_id,
@@ -345,3 +346,43 @@ def test_generated_subckt_d1_branch_matches_record():
         in text, "D1 must carry the full DC set with Rs=0 (single series-R \
 count: r_diode(T) lives in R1 with the Trs1 law)"
     assert "R1 N001 Ki {Rs*(1+Trs1*(temp-Tnom))}" in text
+
+
+def test_generated_subckt_mirror_and_fast_variant():
+    """Session-29 pins. (a) The channel expression is MIRROR-SYMMETRIC
+    third quadrant: abs(V(dx,sx)) inside, nested-if sign factor outside
+    (LTspice has no sign() function) -- one flat expression, no buffered
+    helper nodes (measured worse). (b) The FAST variant file exists with
+    the SAME subckt name, carries NO recovery network, maps the pole-gauge
+    storage onto the plain diode's tt = t_minor + t_pole/0.69, single-
+    counts the series R in the model card (no R1), and puts the Cds
+    charge-master at the D-S terminals."""
+    full = OUT / "ISC040N10NM8_full.subckt"
+    fast = OUT / "ISC040N10NM8_fast.subckt"
+    if not (full.exists() and fast.exists()):
+        pytest.skip("out/ not present (gitignored deliverable)")
+    for path in (full, fast):
+        bch = [ln for ln in path.read_text(encoding="utf-8").splitlines()
+               if ln.startswith("Bch ")]
+        assert len(bch) == 1, f"{path.name}: exactly one channel B-source"
+        assert "if(V(dx,sx)<0,-1,if(V(dx,sx)>0,1,0))*" in bch[0], \
+            f"{path.name}: mirror sign factor missing"
+        assert "abs(V(dx,sx))" in bch[0], \
+            f"{path.name}: mirror must evaluate the forward expr at |v_ds|"
+        assert "nc_vda" not in bch[0], \
+            f"{path.name}: buffered helper nodes are a measured regression"
+    tx = fast.read_text(encoding="utf-8")
+    net = "\n".join(ln for ln in tx.splitlines() if not ln.startswith("*"))
+    assert "Xrec" not in net and "DiodeRecov" not in net, \
+        "fast variant must carry NO recovery network (header comments aside)"
+    assert "D1 s d MyDiode" in tx, "fast: body diode anode=source, cathode=drain"
+    tt = ISC040_RECOV.t_minor + ISC040_RECOV.t_pole / 0.69
+    card = [ln for ln in tx.splitlines() if ln.startswith(".model MyDiode")]
+    assert len(card) == 1
+    assert f"tt={tt * 1e9:.6g}n" in card[0], "fast: tt mapping"
+    assert f"Rs={ISC040_DIODE.r_diode:.6g}" in card[0] and \
+        f"Trs1={ISC040_DIODE.a_rdiode:.6g}" in card[0], \
+        "fast: series R single-counted in the model card (Trs1 law)"
+    assert "Rs=0," not in card[0], "fast: no Rs=0 split (that is the FULL gauge)"
+    assert "Cds D S Q=" in tx, "fast: Cds charge-master at the D-S terminals"
+    assert ".subckt ISC040N10NM8 G D S K" in tx, "fast: same drop-in subckt name"

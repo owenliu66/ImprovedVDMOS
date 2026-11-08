@@ -41,15 +41,21 @@ up to ~6 % low around the knee (tests/test_model.py::test_level1_limit_agreement
 
 The body diode (diode.py, LTspice diode DC branch) is assembled at the TERMINALS:
 
-    i_d = i_ch(v_ds > 0) - i_di(-v_ds)
+    i_d = sign(v_ds) * i_ch(|v_ds|) - i_di(-v_ds)
 
 The diode bypasses r_d/r_s (only channel current flows through the package
 resistances), so the package-R solve and the diode r_diode solve stay
-independent one-dimensional problems. The channel contribution is 0 for
-v_ds <= 0 (the channel formulation is forward-polarity only; sign-symmetric
-channel conduction for synchronous rectification is a Queue item, not this
-model). With the diode off (i_s = i_sr = 0, the default) vdmos_id() is
-bit-identical to the pre-diode model.
+independent one-dimensional problems. The channel is MIRROR-SYMMETRIC
+(session 29, third-quadrant / synchronous-rectifier conduction): the package-R
+solve runs on the |v_ds| magnitudes (the forward-polarity bracket proof is
+unchanged) and the mirror supplies the sign, so the channel conducts in
+parallel with the diode for v_ds < 0 once v_gs is driven past threshold.
+LIMITATION (accepted, session 29): the mirror cannot capture V_gs modulation
+of the diode forward drop -- in Si majority-carrier third quadrant the channel
+takes over before the discrepancy matters; SiC negative-drive and GaN (no
+body diode) are covered by the channel itself, and the V_gs-dependence of the
+diode Vf there is ignored. With the diode off (i_s = i_sr = 0, the default)
+vdmos_id() is bit-identical to the pre-diode model on v_ds >= 0.
 
 Design rationale -- Level-1 comparison, charge-cap physics, package-R solver
 derivation, body-diode topology and LTspice fidelity -- lives in the project
@@ -71,13 +77,15 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarra
 
     Terminal assembly (drain-referenced, positive into the drain):
 
-        i_d = i_ch(v_ds > 0) - i_di(v_sd = -v_ds)
+        i_d = sign(v_ds) * i_ch(|v_ds|) - i_di(v_sd = -v_ds)
 
-    The channel is evaluated at the internal node voltages through the
-    package r_d/r_s solve (forward polarity only); the body diode connects
-    directly to the terminals and bypasses r_d/r_s, carrying all reverse
-    current. With i_s = i_sr = 0 (the default) the diode is exactly zero and
-    this function is bit-identical to the pre-diode model.
+    The channel is mirror-symmetric and evaluated at the internal node
+    voltages through the package r_d/r_s solve (run on the |v_ds|
+    magnitudes); the body diode connects directly to the terminals and
+    bypasses r_d/r_s, conducting in parallel with the channel for
+    v_ds < 0. With i_s = i_sr = 0 (the default) the diode is exactly zero
+    and this function is bit-identical to the pre-diode model on
+    v_ds >= 0 (exact mirror on v_ds < 0).
 
     Parameters
     ----------
@@ -112,24 +120,31 @@ def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarra
         t_k = np.full(v_ds.shape, t_c + 273.15, dtype=float)
         i_di = _solve_diode_series_r(-v_ds, p.r_diode, p, t_k)
 
-    fwd = v_ds > 0.0
-    if not np.any(fwd):
+    nz = v_ds != 0.0
+    if not np.any(nz):
         return np.zeros_like(v_ds) if diode_off else -i_di
 
+    # Third-quadrant channel (session 29): mirror-symmetric conduction.
+    # The package-R solve runs on the |v_ds| magnitudes -- its forward-
+    # polarity bracket proof is untouched -- and the mirror supplies the
+    # sign. Multiplying by sign = +/-1.0 is exact, so forward-polarity
+    # results are bit-identical to the pre-session-29 model.
+    sgn = np.sign(v_ds)
+    mag = np.abs(v_ds)
     if p.r_d == 0.0 and p.r_s == 0.0:
-        if np.all(fwd):
-            i_ch = _channel_current(v_ds, v_gs, p)
+        if np.all(nz):
+            i_ch = sgn * _channel_current(mag, v_gs, p)
         else:
             i_ch = np.zeros_like(v_ds)
-            i_ch[fwd] = _channel_current(v_ds[fwd], v_gs[fwd], p)
+            i_ch[nz] = sgn[nz] * _channel_current(mag[nz], v_gs[nz], p)
     else:
-        # Solve on the forward-polarity points only: the channel model is
-        # singular in reverse, and the diode carries v_ds <= 0 by itself.
-        # The wrapper is 0 at v_ds = 0, so the package-R bracket proof
+        # Solve on the |v_ds| magnitudes: the channel solver keeps its
+        # v_ds >= 0 bracket guard; the mirror handles the reverse half.
+        # The channel branch is 0 at v_ds = 0, so the bracket proof
         # (g strictly decreasing, f(0) = 0) is unchanged.
-        vd, vg = v_ds[fwd], v_gs[fwd]
+        vd, vg = mag[nz], v_gs[nz]
         i_ch = np.zeros_like(v_ds)
-        i_ch[fwd] = _solve_package_r(
+        i_ch[nz] = sgn[nz] * _solve_package_r(
             vd, vg, p.r_d, p.r_s, lambda d, g: _channel_current(d, g, p),
             r_g=p.r_s - p.r_sk,
         )

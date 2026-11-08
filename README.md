@@ -53,7 +53,7 @@ One C¹ continuous expression for the intrinsic drain current
 parameters carry the `k_` prefix):
 
 $$
-i_d = k_p\, v_{ov}^{eff2}\,
+i_d = k_p\, v_{oveff2}\,
 \frac{v_{dseff} - \dfrac{v_{dseff}^2}{2\,v_{knee}}}{1 + \dfrac{v_{dseff}}{v_{vsat}}}
 \bigl(1 + k_\lambda\, v_{ds}\, k_{db}\bigr)
 \;+\; g_k\, v_{ds}\, k_{kink}\, k_{db}
@@ -77,17 +77,17 @@ v_{ov} = v_{sub}\,\ln\!\Bigl(1 + e^{(v_{gs} - v_{th})/v_{sub}}\Bigr)
 $$
 
 $$
-v_{ov}^{eff} = \frac{v_{ov}}{\Bigl[1 + \bigl(v_{ov}/v_{ovmax}\bigr)^{k_{ovsharp}}\Bigr]^{1/k_{ovsharp}}}
+v_{oveff} = \frac{v_{ov}}{\Bigl[1 + \bigl(v_{ov}/v_{ovmax}\bigr)^{k_{ovsharp}}\Bigr]^{1/k_{ovsharp}}}
 \qquad\text{(soft gate-charge cap, } v_{ovmax}=0 \Rightarrow \text{identity)}
 $$
 
 $$
-v_{ov}^{eff2} = v_{ov}^{eff}\,\bigl(1 + k_{\beta\text{-trap}}\, v_{ov}^{eff}\bigr)
+v_{oveff2} = v_{oveff}\,\bigl(1 + k_{\beta\text{-trap}}\, v_{oveff}\bigr)
 \qquad\text{(interface-trap-filling gain, off at } k_{\beta\text{-trap}}=0)
 $$
 
 $$
-v_{knee} = \max\!\left(\frac{v_{ov}^{eff2}}{1 + k_\theta\, v_{ov}^{eff2}},\; v_{kneemin}\right)
+v_{knee} = \max\!\left(\frac{v_{oveff2}}{1 + k_\theta\, v_{oveff2}},\; v_{kneemin}\right)
 \qquad\text{(vertical-field mobility degradation)}
 $$
 
@@ -106,17 +106,17 @@ $$
 
 ### Limits and the saturation exponent
 
-For $v_{ds} \ll v_{knee}$: $i_d \to k_p\, v_{ov}^{eff2}\, v_{ds}$ (ohmic; the
-Ron conductance is $k_p v_{ov}^{eff2}$, independent of any knee knob).
+For $v_{ds} \ll v_{knee}$: $i_d \to k_p\, v_{oveff2}\, v_{ds}$ (ohmic; the
+Ron conductance is $k_p v_{oveff2}$, independent of any knee knob).
 For $v_{ds} \gg v_{knee}$: $v_{dseff} \to v_{knee}$ and
 
 $$
-i_{d,sat} = \frac{k_p\, v_{ov}^{eff2}\, v_{knee}}{2\,\bigl(1 + v_{knee}/v_{vsat}\bigr)}\,\bigl(1 + k_\lambda v_{ds}\bigr)
+i_{d,sat} = \frac{k_p\, v_{oveff2}\, v_{knee}}{2\,\bigl(1 + v_{knee}/v_{vsat}\bigr)}\,\bigl(1 + k_\lambda v_{ds}\bigr)
 $$
 
 With $v_{vsat} \to \infty$ the gate exponent is
-$\alpha \equiv \partial \ln i_{d,sat}/\partial \ln v_{ov}^{eff2}
-= 1 + \bigl(1 + k_\theta v_{ov}^{eff2}\bigr)^{-1} \in (1, 2]$:
+$\alpha \equiv \partial \ln i_{d,sat}/\partial \ln v_{oveff2}
+= 1 + \bigl(1 + k_\theta v_{oveff2}\bigr)^{-1} \in (1, 2]$:
 $k_\theta = 0$ recovers the square law, large $k_\theta$ approaches
 $\alpha \to 1$. Velocity saturation ($v_{vsat}$) lowers α further; the
 DEFAULT set gives α = 1.08 over v_gs = 6–12 V, and α ≈ 1.2–1.6 — the physical
@@ -135,8 +135,8 @@ the hard corner).
   hold finite free charge, so effective overdrive saturates. The soft
   power-law cap is identity for $v_{ov} \ll v_{ovmax}$, asymptote $v_{ovmax}$
   beyond, and
-  $\dfrac{d v_{ov}^{eff}}{d v_{ov}} = \bigl(1 + u^{k_{ovsharp}}\bigr)^{-1/k_{ovsharp} - 1}$
-  with $u = v_{ov}/v_{ovmax}$, hence $0 \le dv_{ov}^{eff}/dv_{ov} \le 1$
+  $\dfrac{d v_{oveff}}{d v_{ov}} = \bigl(1 + u^{k_{ovsharp}}\bigr)^{-1/k_{ovsharp} - 1}$
+  with $u = v_{ov}/v_{ovmax}$, hence $0 \le dv_{oveff}/dv_{ov} \le 1$
   everywhere. Measured collapse is abrupt → $k_{ovsharp} \approx 10$, not 1.
   Applied **before** $v_{knee}$: the pinch-off voltage is set by the final
   channel charge. Evaluated in log space (`logaddexp`) — $k_{ovsharp}$ ~10–40
@@ -144,7 +144,7 @@ the hard corner).
 - **Trap-filling gain** (4H-SiC): implied channel overdrive slope
   $dv_{ov}/dv_{gs}$ rises past 1 as interface traps fill — impossible for the
   pre-gain model (softplus slope saturates at 1, the cap only reduces). The
-  gain gives $dv_{ov}^{eff2}/dv_{ov}^{eff} = 1 + 2k_{\beta\text{-trap}} v_{ov}^{eff} > 1$.
+  gain gives $dv_{oveff2}/dv_{oveff} = 1 + 2k_{\beta\text{-trap}} v_{oveff} > 1$.
   **$k_{\beta\text{-trap}} \ge 0$ is a hard constraint** (ValueError below):
   negative values make $v(1+k v)$ non-monotone and $i_d$ multi-valued in
   $v_{gs}$. With the cap active the composite asymptote is
@@ -183,6 +183,19 @@ the hard corner).
 
 "Off" is reached by leaving a parameter out of the free set, never by driving
 it to the lower bound.
+
+### Third quadrant (v_ds < 0) — mirror-symmetric channel
+
+The channel conducts in reverse: $i_{ch} = \operatorname{sign}(v_{ds})\,
+i_{ch}^{fwd}(|v_{ds}|, v_{gs})$, in parallel with the body diode — the
+real-device topology, and what a synchronous rectifier needs. The package-R
+solver runs on $|v_{ds}|$ magnitudes, so the forward bracket proof is
+untouched; multiplying by ±1.0 is exact, so forward-polarity results are
+bit-identical. The mirror cannot capture $v_{gs}$ modulating the diode's
+*forward* voltage (accepted: matters for SiC with negative drive; GaN has
+no body diode and relies on the channel anyway). In the LTspice subckts
+this is `abs(V(dx,sx))` inside the flat channel expression times a
+nested-`if()` sign factor (LTspice has no `sign()` function).
 
 ## Package resistance (r_d, r_s, r_sk)
 
@@ -346,6 +359,16 @@ Cds in both places (double-counts C_oss); `R2 = 1 µΩ` + B3 `+1 µΩ` floor
 break near-singular B3/R1/R2/switch bridge loops (negligible waveform
 impact).
 
+**Fast variant** (`out/ISC040N10NM8_fast.subckt`, session 29): same subckt
+name, drop-in `.include` swap — no recovery network at all; the plain body
+diode carries `tt = t_minor + t_pole/0.69` (0.69 ≈ ln 2 maps the pole-gauge
+storage onto the SPICE diode's exponential decay), series R single-counted
+in the model card, Cds charge-master relocated to the D–S terminals.
+First-order storage (Q ≈ tt·I_F) with a hard snap instead of the pole-gauge
+soft snap — ~20 % fewer iterations in a synchronous buck and the DC point
+solves without Gmin stepping. The FULL subckt owns the datasheet recovery
+numbers; fast is for speed.
+
 ## Capacitance / charge (summary — full spec in CAP_SPEC.md)
 
 Charge-master LUTs $q_k(v) = \int C\,dv$ (PCHIP on ln C vs linear v) built
@@ -468,12 +491,14 @@ print(res.summary())
 
 ## Scope / not yet implemented
 
-In scope: channel current + package series R + body-diode DC branch +
-charge-master capacitance + behavioral recovery (LTspice-side).
+In scope: channel current (mirror-symmetric third quadrant) + package
+series R + body-diode DC branch + charge-master capacitance + behavioral
+recovery (LTspice-side, with a no-recovery fast-variant export).
 Open: $v_{gs}$-dependent $C_{gd}$ blend (the Miller-plateau deficit
-quantifies it: SJ +61 %, trench +22–43 %, SiC +10 %), full-device subckt
-channel B-source + kelvin wiring, HV leakage/BV element, $T_j$ thermal node,
-third-quadrant channel, recovery-parameter datasheet extraction protocol.
+quantifies it: SJ +61 %, trench +22–43 %, SiC +10 %), HV leakage/BV
+element, $T_j$ thermal node, recovery-parameter datasheet extraction
+protocol for other parts, and the accepted mirror limitation ($v_{gs}$
+cannot modulate the diode's forward voltage).
 Validation target: double-pulse Eon/Eoff within ~10 %, which static fitting
 alone cannot deliver.
 
