@@ -7,8 +7,8 @@ an LTspice-exact body-diode DC branch, a charge-master capacitance model, and
 a behavioral body-diode recovery network for LTspice export.
 
 Session history, official fitted records, and open problems live in
-[`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md) and
-[`HANDOVER.md`](HANDOVER.md). This file is the model reference.
+[`src/vdmos_fit/STATUS.md`](src/vdmos_fit/STATUS.md). This file is the
+model reference.
 
 ## Why
 
@@ -278,10 +278,10 @@ delta (below), recovery is the network (below), BV/Ibv is a queue item.
 ## Body-diode recovery (minority-carrier storage) — LTspice-side
 
 Recovery is a **behavioral LTspice network** (`DiodeRecov` subckt), not
-package Python — it lives in the export layer
-(`out/ISC040N10NM8_recov.subckt`; records `out/RECOV_POLE_FIT.md`,
-`out/RECOV_INTRINSIC_FIT.md`, `out/RECOV_REPORT.md`; extraction driver
-`src/vdmos_fit/extract_recov.py`). D1 is the diode DC branch above; the
+package Python: instantiated in `out/ISC040N10NM8_recov.subckt` and inside
+the full-device subckt `out/ISC040N10NM8_full.subckt`, with the fitted
+record `ISC040_RECOV` in `reference.py` and the extraction driver
+`src/vdmos_fit/extract_recov.py`. D1 is the diode DC branch above; the
 storage node `q_j0` carries $C_1 = t_{\text{minor}}$ farads to ground
 (leak $R_{off} = 1$), fed by the injection mirror $B1 = -i_{R2}$ and
 clamped $V_{q0} \ge 0$ by ClampD. A unity buffer $E1$ + $R3 = 1\,\Omega$ +
@@ -293,17 +293,18 @@ $$
 i_{rec} = \max\!\left[\frac{V_{q_j}\,(v_{Ki} - v_{Ai})}{\tau},\; 0\right]
 $$
 
-**Gauge (session 25b).** With $R_{off} = 1$, $C_1 = t_{\text{minor}}$:
-storage time constant $= t_{\text{minor}}$, $V_{q0,ss} = I_F$ volts,
-stored charge $= I_F\,t_{\text{minor}}$. $q_0$ is DELETED — observables
-depended only on $t_{\text{minor}}$ and $V_R/(q_0\tau)$; it was a pure
-gauge.
+**Gauge.** With $R_{off} = 1$ and $C_1 = t_{\text{minor}}$ farads the
+storage time constant is $t_{\text{minor}}$, $V_{q0,ss} = I_F$ volts and
+the stored charge is $I_F\,t_{\text{minor}}$: one farad per second of
+lifetime, one volt per amp of forward current. Any separate stored-charge
+knob is then redundant (the observables depend only on $t_{\text{minor}}$
+and the snap ratio), so the gauge is fixed as above.
 
 **Three knobs:** $t_{\text{minor}}$ (carrier lifetime — stored charge and
 Qrr), $t_{\text{pole}}$ (transit/sweep-out memory — the pole makes
-$I_{RM}$ occur 1–2 ns **after** charge exhaustion and makes the Qrr
-di/dt-ratio tunable), and $\tau$ (B2 snap threshold). $\tau$ has a
-genuine **interior optimum ≈ 3e-4**: the clamp→$I_{RM}$ delay obeys
+$I_{RM}$ occur *after* charge exhaustion and makes the Qrr di/dt ratio
+tunable; sharply identified), and $\tau$ (B2 snap threshold). The
+clamp→$I_{RM}$ delay obeys
 
 $$
 \Delta t = t_{\text{pole}}\,\ln\!\frac{V_{q_j}|_{\text{clamp}}}{V_{th}},
@@ -311,56 +312,39 @@ $$
 \qquad \frac{d\,\Delta t}{d\ln\tau} = -\,t_{\text{pole}}
 $$
 
-(verified to ~1 %), so shrinking $\tau$ adds tail time that must be paid
-by shortening $t_{\text{pole}}$ (sharply identified, wall below ~0.6 ns)
-and $t_{\text{minor}}$ — the minimum is where those costs balance.
+so shrinking $\tau$ buys tail time that must be paid by shortening
+$t_{\text{pole}}$ and $t_{\text{minor}}$ — $\tau$ therefore has a genuine
+**interior optimum** where those costs balance, and stays a free knob (the
+optimum is device-specific).
 
-**Measurement doctrine (session 25a).** The datasheet Qrr excludes the
-$C_{oss}$ excursion, so fit the **intrinsic** branch current $i_{R2}$
-(which carries no C2 displacement current); terminal-path numbers differ
-by ≈ 28 nC at 100 A/µs and are reported for reference only.
+**Measurement doctrine.** The datasheet Qrr excludes the $C_{oss}$
+excursion, so fit the **intrinsic** branch current $i_{R2}$ (which carries
+no C2 displacement current); terminal-path numbers are contaminated by the
+output-capacitance excursion and are reported for reference only.
 
-**Fitted on ISC040N10NM8** ($V_R = 50$ V, $I_F = 12.5$ A, 25 °C, both
-datasheet di/dt rows): $t_{\text{minor}} = 22.363$ n,
-$t_{\text{pole}} = 0.8324$ n, $\tau = 3.79\times 10^{-4}$ →
-**RMS 1.11 % over all four datasheet numbers** (1000 A/µs: Qrr 248.2 nC
-+0.5 %, t_rr 24.69 ns −1.3 %; 100 A/µs: Qrr 35.71 nC −0.8 %, t_rr 29.46 ns
-+1.6 %; t_rr = 10 % of $I_{RM}$, intrinsic path; record `ISC040_RECOV`). The two-knob model's
-Qrr-ratio floor (0.175 vs datasheet 0.146) is DEAD — the pole reproduces
-both di/dt rows from one physical state; the session-23 "Qrr rises with
-di/dt is unreproducible" verdict is superseded. $t_{\text{pole}}$ is
-**sharply identified** (fix-and-refit: 0.3 n → 15.6 %, 2 n → 11.6 %,
-8 n → 52.8 %, → 0 → 17.45 % RMS). Physical anchor:
-$L = \sqrt{2 D_a t_{\text{pole}}} = 1.4\text{–}2.7\ \mu$m for
-$D_a = 12\text{–}36$ cm²/s — a diffusive scale, right for the
-depletion-adjacent region of a 100 V SJ device, NOT a drift transit time.
-Falsifiable out-of-sample prediction at 300 A/µs: Qrr ≈ 104 nC,
-t_rr ≈ 29 ns, $I_{RM}$ ≈ 6.7 A.
+**Extraction protocol** (`extract_recov.py`). One batched `.step param k`
+index sweep per di/dt point (mixed-radix decomposition — deterministic,
+no `.step` nesting ambiguity), log-log multilinear surrogates for
+(Qrr, t_rr), multi-start surrogate inverse solve, then TRF polish on real
+runs in log space with a deliberately coarse `diff_step` (finite-difference
+cost differences must stay above the simulator's own measurement noise or
+the Jacobian goes noise-dominated and the fit stalls), a generous step
+budget ($\tau$ sits in a flat valley coupled to both other knobs),
+$\tau$ free, **no dTmax** (the pole rounds the snap and the adaptive
+controller resolves it), **no `.ic`** (the DC operating point IS the
+pre-event state: no DC current in R3 ⇒ $V_{q_j} = V_{q0}$),
+`solver=alt method=gear reltol=1e-4`. Identifiability by fix-and-refit
+penalties, never marginal σ.
 
-**Extraction protocol (session 25c, `extract_recov.py`).** One batched
-`.step param k` index sweep per di/dt point (mixed-radix decomposition —
-deterministic, no `.step` nesting ambiguity), log-log multilinear
-surrogates for (Qrr, t_rr), multi-start surrogate inverse solve, then TRF
-polish on real runs in log space with `diff_step = 0.03` (smaller steps
-put the cost difference below the simulator's own ~1e-4 relative
-measurement noise — the Jacobian goes noise-dominated and the fit stalls;
-measured), a generous step budget (tau is a flat valley coupled to both
-other knobs), tau free (≥ 1e-6), **no dTmax** (the pole rounds the snap:
-none/2.5n/1n/0.5n agree to ≤0.01 % and none is faster — the session-24
-"dTmax mandatory" finding was pole-free-era), **no `.ic`** (the DC
-operating point IS the pre-event state: no DC current in R3 ⇒
-$V_{q_j} = V_{q0}$), `solver=alt method=gear reltol=1e-4`.
-Identifiability by fix-and-refit penalties, never marginal σ.
-
-**Integration requirements** (LTspice 26.x, all verified):
-`method=gear reltol=1e-4` (trapezoidal rings on the snap); the measured
-C_ds charge-master sits **inside** the recovery branch at Ki–A
-(electrically D–S through B3+R1/R2, fc ≈ 3 GHz) — at the D–S terminals
-hard forward re-turn-on crashes (D1 has no Cjo), at Ki–Ai the network is
-singular; the caps delta therefore exports **Cgs/Cgd only**
-(`ltspice.py` `cgs_cgd_only=True`) — never export Cds in both places
-(double-counts C_oss); `R2 = 1 µΩ` + B3 `+1 µΩ` floor break
-near-singular B3/R1/R2/switch bridge loops (< 0.1 % waveform impact).
+**Integration requirements** (LTspice): `method=gear reltol=1e-4`
+(trapezoidal rings on the snap); the measured C_ds charge-master sits
+**inside** the recovery branch at Ki–A (electrically D–S through
+B3+R1/R2) — at the D–S terminals hard forward re-turn-on crashes (D1 has
+no Cjo), at Ki–Ai the network is singular; the caps delta therefore
+exports **Cgs/Cgd only** (`ltspice.py` `cgs_cgd_only=True`) — never export
+Cds in both places (double-counts C_oss); `R2 = 1 µΩ` + B3 `+1 µΩ` floor
+break near-singular B3/R1/R2/switch bridge loops (negligible waveform
+impact).
 
 ## Capacitance / charge (summary — full spec in CAP_SPEC.md)
 
