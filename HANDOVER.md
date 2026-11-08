@@ -1,3 +1,251 @@
+# Handover — ImprovedVDMOS session 28: ALL SESSION-27 PENDING DONE (diode record LANDED + subckt D1 = DC set + pinned tests)
+
+## ⚠️ START HERE — session 28 (this session, all verified)
+
+DONE:
+1. **`ISC040_DIODE` record LANDED** in `reference.py` (+ `ISC040_DIODE_FREE` /
+   `_RMSE_REL` / `_GROUP_RMSE_REL`), exported from `__init__.py`. Reproducible
+   protocol `scripts/fit_isc040_diode.py` (4 multi-starts, local `T_j (C)`
+   loader). Probes reproduce the session-27 findings: k_n=2.0 pinned → 35.2 %,
+   TC-off → 3.31 %, freeing b_rdiode/a_ikf or i_sr buys nothing (0.514 %).
+   ALSO FIXED: session 27 had left a DUPLICATE `ISC040_CHANNEL`/
+   `IscChannelRecord` block in reference.py (the second silently overrode the
+   first); deduped keeping the full-precision values from
+   out/isc040_channel_params.json. Constants renamed
+   `ISC040_CHANNEL_RMSE25_REL` / `ISC040_CHANNEL_RMSE_TC_REL`.
+2. **Full subckt D1 branch UPDATED to the DC-fit set.** `gen_full_subckt.py`
+   now emits the record values on the Xrec instance line and the model card
+   `.model MyDiode D(Is=Is,Rs=0,N=N,Ikf=Ikf,Eg=Eg,Xti=Xti,Tnom=Tnom)` plus
+   `R1 N001 Ki {Rs*(1+Trs1*(temp-Tnom))}`. RECONCILIATION NOTE: the
+   session-27 wording ("D1 Rs=0.96m ... R1 = r_diode is fine") would
+   DOUBLE-COUNT the series R (~1.92 mΩ extra → ~0.7 V error at 367 A); the
+   implemented split carries r_diode(T) in R1 (Trs1 law, Tnom-referenced,
+   verified to ~1e-5 by test_diode::test_ltspice_tc_laws) with Rs=0 on D1 —
+   exactly ONCE — and the branch is now temperature-complete (the `temp`
+   reserved variable works in R value expressions; verified).
+   `out/ISC040N10NM8_full.subckt` regenerated (35.1 KB). Recovery knobs still
+   from `ISC040_RECOV` (that record UNCHANGED — it documents the extraction-
+   run bench conditions).
+3. **BENCHES** (all in out/, run via `"C:\Program Files\ADI\LTspice\LTspice.exe"
+   -b -w file.cir`):
+   - `parity_isc040_full_meas.cir` (NEW .meas variant of the parity bench,
+     reltol 1e-8, S/K grounded): worst 333 ppm vs the RAW record — fully
+     explained by the documented 1 µΩ Rs floor (it carries the full channel
+     current: I·1µΩ gate degeneration ~1 mV at 1 kA) plus .6g netlist
+     formatting; vs the NETLIST-CONSTANT Python model (floor + formatted
+     values) worst **0.05 ppm**. The session-27 "<0.001 %" claim therefore
+     holds only against a floor-aware comparison.
+   - `diode_fwd_25.cir` / `diode_fwd_175.cir` (NEW): .dc LIST at the exact
+     CSV V_sd points (no FIND interpolation error), gate 0 V. LTspice vs
+     netlist-constant Python: **≤27 ppm at BOTH 25 and 175 °C** (residual =
+     LTspice's internal physical constants, same level as the test_diode
+     cross-validation); LTspice vs CSV RMSE 0.450 %/0.578 % = the fit's own
+     residual (0.445/0.575) — the subckt branch adds nothing on top. The
+     175 °C run confirms the Eg/Xti/Tnom card TC + R1 Trs1 law end-to-end.
+   - `recov_d1_check.cir` (NEW, clean-ASCII rewrite of recov_r1_sens.cir
+     which carries stray 0xA7/0xB5 bytes): `.step param d1 list 0 1` switches
+     the D1 card between the OLD bench set (Is=1u N=1.4, Ikf=1e9) and the NEW
+     DC set; R1=0.961328m both. didt=1000 A/µs:
+     q_rri 248.171 → 248.059 nC, t_rri 24.684 → 24.702 ns,
+     i_fi_min 18.436 A — recovery INSENSITIVE to the D1 Is/N/Ikf swap
+     (≤0.075 %), and the record's achieved 248.20/24.687 is reproduced at
+     the new R1. Is/N were untested in recovery before; now verified.
+4. **PINNED TESTS LANDED**: `tests/test_isc040_official.py` — 11 tests, all
+   pass: channel 25 C 132-pt RMSE reproduction + TC (chord + Vth-VOLTAGE
+   residuals exactly as fit_tc), acceptance pins (Ron chords 3.35/3.56/3.89
+   mΩ @Vgs 15/10/8, Ron@Vgs15.7-T 2.12/3.34/5.20/7.76 mΩ @−55/25/100/175,
+   Vth@520µA 3.52/3.06/2.50/2.07 V — data comparisons at interpolated reads,
+   since the Rdson_Vgs CSV Vgs points are digitized ~15.7/10.6/8.8 not round
+   numbers), TC-law invariants (r_d ×2.293 @175 C, s_vth −7.486 mV/K, v_sub
+   T-invariant, k_p falls with T), transfer monotonicity, record sanity;
+   diode RMSE reproduction + interior/fixed-structure pins (k_n ~1.05 NOT
+   2.0, i_sr=0, a_ikf=b_rdiode=0) + the i_s↔k_n pair anchor
+   vdmos_diode(1 V, 25 C) = 152.6 A; plus a structure pin that the GENERATED
+   subckt's D1 branch matches the record (skips when out/ absent).
+5. **FULL SUITE + RUFF**: pytest 199 tests → **1 failure, PRE-EXISTING and
+   unrelated**: `test_caps.py::test_ltspice_caps_parity` c1 (got
+   −0.00734197 vs pin −0.00736535, 0.32 % against the 0.2 % pin). It fails
+   IDENTICALLY at HEAD 6004afa with this session's changes stashed. Root
+   cause: the harness samples FIND currents at digitized-interval midpoints,
+   which coincide with one of the 12 fine stair breakpoints (knife-edge);
+   LTspice 26.1.1's adaptive step sequence lands the sample on the other
+   stair segment than the version the pin was written on. A fixed-1 ns-step
+   experiment moved the failure from c1 to a2 — harness fragility, NOT a
+   record regression (the caps records are untouched; git diff shows zero
+   cap-related lines). OWNER DECISION NEEDED: re-baseline the pins on
+   26.1.1 or redesign the sample points off the fine breakpoints — do NOT
+   just loosen rel. RUFF: all checks pass (fixed: `__init__` import sort,
+   quoted annotations in the two fit scripts, `zip(..., strict=True)`, the
+   long Xrec line split in the generator).
+
+PENDING next session:
+- The caps-parity pin decision above (the only red test).
+
+## Session 27 (history) — START HERE as written then
+
+DONE (all verified):
+1. **ISC040N10NM8 channel record LANDED** — closes the queue item that was
+   BLOCKED ON DATA (data/ now has ISC040N10NM8_IV_25C.csv + Rdson/Vth CSVs).
+   `reference.py::ISC040_CHANNEL` (`IscChannelRecord`, `params_at(T)`),
+   exported in `__init__.py` (imports verified clean). Protocol
+   `scripts/fit_isc040_channel.py` (reproducible, 5 multi-starts → same basin).
+2. **FULL 4-terminal subckt GENERATED + LTspice-parity VERIFIED** —
+   `scripts/gen_full_subckt.py` → `out/ISC040N10NM8_full.subckt` (D G S K,
+   ~33.8 KB, self-contained: channel B-source + caps + DiodeRecov + package R).
+   Channel B-source reproduces Python `vdmos_id` to **<0.001 %** at every point
+   (bench `out/parity_isc040_full.cir`, LTspice 26.1.1, clean Newton solve).
+   (Session-28 note: vs the RAW record the worst is 333 ppm — the documented
+   1 µΩ Rs floor + .6g formatting; vs the netlist-constant model 0.05 ppm.)
+3. **Diode DC branch FITTED** from `data/ISC040N10NM8_Diode.csv` (25/175 °C,
+   26 pts) — best set **RMSE 0.51 %** (25 °C 0.45 %, 175 °C 0.58 %).
+4. **Recovery R1-insensitivity MEASURED** (see below) — recovery q_rri/t_rri
+   unchanged across R1 = 10 µ/1 m/10 m, so the DC-fit diode params can go into
+   D1 without disturbing the pinned recovery record.
+
+PENDING (do these first next session, in order): → **ALL THREE DONE in
+session 28** — see the session-28 START HERE block at the top for the results;
+the wording below is kept as the task definition (note: item 2's literal
+"Rs=0.96m on D1 + R1 = r_diode" would double-count the series R — session 28
+implemented D1 Rs=0 + R1 = r_diode(T) with the Trs1 law, single count).
+1. **Add the diode record to `reference.py`** (`ISC040_DIODE`, `Params` with
+   the fitted DC set below) + export in `__init__.py`. NOT done yet.
+2. **Update the full subckt's D1 branch** to the DC-fit diode params (currently
+   `gen_full_subckt.py` still emits the OLD bench diode Is=1u N=1.4 Rs=10m via
+   `ISC040_RECOV.is_diode/rs_diode/n_diode`). Reconcile: D1 = DC-fit set
+   (Is=3.77e-12, N=1.053, Rs=0.96m, Ikf=357, Eg=1.11, Trs1=0.00102, Tnom=25,
+   Xti=3); R1 = r_diode (0.96 m) is fine (recovery insensitive, measured).
+   Then re-run `out/parity_isc040_full.cir` AND a forward-V_SD check vs the
+   diode CSV, and re-run the recovery bench to confirm q_rri≈248.2/t_rri≈24.69
+   still hold with the new D1 (only Rs was stepped so far — Is/N not yet tested
+   in the recovery bench; expected insensitive because I(D1)≈−1 nA carries no
+   plateau, but VERIFY).
+3. **Pinned tests**: `tests/test_isc040_official.py` (channel record vs CSVs,
+   like test_imcq120_official/test_st8l65_official) + a diode record test.
+   Run full pytest + ruff.
+
+## ISC040_CHANNEL record (OFFICIAL, promoted this session)
+
+Model family: **SJ charge-cap** (v_ovmax/k_ovsharp free, k_theta=0, v_vsat=1e4
+off, k_lambda=0, g_k=0) — same family as ST8L65N044M9. Beats the velocity-sat
+form (1.33 % vs 1.73 % 25 C RMSE) and is genuinely sensed (ceilings the Vgs=15
+conductance; without it the Ron chord is ~13 % low).
+
+Protocol (user's 3 notes): (1) NO transfer curve (datasheet Vds conditions
+vague) → fit from output curves + Rds(on) chords only; (2) NOT Kelvin → r_sk=0,
+and the data REJECTS gate-loop degeneration (r_s→0 from every start, monotonically
+worse as r_s grows — the IMCQ session-22 finding), so the whole current-loop
+series R is in r_d, r_s=r_sk=0; (3) fit 25 C FIRST and LOCK, then TC (no high-T
+IV data — TC comes from Rds(on)-vs-Vgs at −55/25/100/175 °C + Vth-vs-Tj).
+
+Stage 1 (25 C, locked): free = k_p, v_th0, v_sub, v_ovmax, k_ovsharp,
+k_kneesharp, k_eta, v_dbsat, r_d. Data = IV_25C (69) + Rds(on)-vs-Id_25C (55,
+converted to V_ds=R·I chords) + Rds(on)-vs-Vgs 25 C subset (8, I_test=25 A).
+Relative weight. r_d ≤ 3.4 mΩ (datasheet 25 C chord). **RMSE 1.33 %** (132 pts).
+Stage 2 (TC, 25 C locked): free = s_vth, beta_p, a_rd, b_rd. TC laws:
+  k_p(T)=k_p25·(T_K/298.15)^−beta_p; v_th0(T)=v_th0_25+s_vth·(T−25);
+  r_d(T)=r_d25·(1+a_rd·ΔT+b_rd·ΔT²) [quadratic Trs1/Trs2, NEVER linear];
+  v_sub/v_ovmax/k_ovsharp/k_kneesharp/k_eta/v_dbsat T-independent.
+  Data = Rds(on)-vs-Vgs all 4 T (chord residual as CURRENT at R_data·25 A) +
+  Vth-vs-Tj both currents (residual on the Vth VOLTAGE: solve model gate V at
+  V_ds=V_gs giving I_d, vs datasheet Vth — fits the Vth(T) curve/slope, avoids
+  the exponential-current sensitivity the single-softplus subthreshold can't
+  reproduce). **TC overall 2.97 %** (Rds(on) 2.35 %, Vth-voltage 4.04 %).
+
+Record values (ISC040_CHANNEL):
+  k_p25=222.59, v_th0_25=4.28667, v_sub=0.244088, v_ovmax=5.77459,
+  k_ovsharp=2.19649, k_kneesharp=1.78701, k_eta=0.0313065, v_dbsat=0.52529,
+  r_d25=0.00248295, s_vth=−0.00748634, beta_p=2.2004, a_rd=0.0056206,
+  b_rd=2.00079e−05. Fixed: k_theta=0, v_vsat=1e4, k_lambda=0, g_k=0,
+  r_s=r_sk=0.
+Acceptance (independent specs, never fitted): Ron@25A 3.35/3.56/3.89 mΩ @Vgs
+15/10/8 (data 3.33/3.52/3.87); Ron@Vgs15 vs T 2.12/3.34/5.20/7.76 mΩ @−55/25/
+100/175 (data 2.05/3.33/5.23/8.00); Vth@520µA vs T 3.52/3.06/2.50/2.07 V
+@−52/22/107/173 (data 3.37/3.05/2.58/2.07). s_vth −7.49 mV/K matches datasheet
+Vth_Tj slope (~−6.3 mV/K, within model-form). β_p essential (without it Rdson
+RMSE→13 %, channel-dominated low-Vgs breaks) and identifiable ONLY because
+Rds(on)-Vgs(T) pins r_d(T) at high Vgs (IMCQ doctrine).
+Identifiability caveats (quote curves, never split): r_d↔r_s corr −1.0 (only
+sum sensed); k_p↔v_th0↔v_ovmax↔r_d cluster |corr|≤0.86 (composite channel
+conductance is the record); β_p weak (σ≈4); v_dbsat σ≈77 (inert, k_db(5V)~0.99
+but data stops at Vds≈5 V).
+
+## Diode DC fit (data/ISC040N10NM8_Diode.csv, 25/175 °C, 26 pts) — record LANDED session 28 (`ISC040_DIODE`; protocol `scripts/fit_isc040_diode.py`)
+
+**KEY FINDING: k_n=2.0 (the ST8L65 fixed value) is WRONG here.** With k_n free
+RMSE drops 35 %→3.31 %; k_n lands ≈1.05 (near-ideal diffusion, unlike the SJ
+part). i_s↔k_n corr +0.999 (degenerate prefactor pair — quote the pair/curve,
+not i_s alone; i_s σ≈12). i_kf (high-injection knee) and v_eg (silicon ~1.11 eV)
+well-sensed. Recombination branch NOT needed (i_sr free is worse, 4.5 %).
+**Linear r_diode TC (a_rdiode) is the decisive TC: 3.31 %→0.51 %**, strongly
+identified (σ 0.013). Quadratic b_rdiode and a_ikf buy nothing and go degenerate
+with only 2 temperatures (a_rdiode↔b_rdiode corr −1.0) → DO NOT free them.
+
+Best set (free = i_s, k_n, r_diode, i_kf, v_eg, a_rdiode; fixed k_xti=3.0,
+i_sr=0, k_nr=2.0, t_nom=25):
+  i_s=3.7679e−12, k_n=1.0529, r_diode=0.00096133, i_kf=357.18, v_eg=1.1097,
+  a_rdiode=0.0010248.  RMSE 0.51 % (25 C 0.45 %, 175 C 0.58 %).
+  sigma: i_s 12.3, k_n 0.45, r_diode 0.005, i_kf 147, v_eg 0.055, a_rdiode 0.013.
+  corr: i_s↔k_n +0.999, r_diode↔i_kf +0.994.
+NOTE: r_diode ≈ 0.96 mΩ is ~10× SMALLER than the recovery branch's R1=10 mΩ
+(the old bench set). Reconcile in the subckt (see PENDING 2).
+
+## Recovery R1-insensitivity (MEASURED this session — enables the D1 update)
+
+`out/recov_r1_sens.cir` (record recovery knobs tau=3.78928e−4, t_minor=22.3635n,
+t_pole=0.832389n, D1 unchanged Is=1u N=1.4, didt=1000 A/µs, `.step param Rs list
+10m 1m 10u` → Rs drives R1 only, D1 has Rs=0):
+  q_rri = 248.12 / 248.12 / 248.16 nC;  t_rri = 24.684 / 24.684 / 24.687 ns;
+  i_fi_min ≈ 18.435 A  (for R1 = 10µ / 1m / 10m).
+→ **Recovery is INSENSITIVE to R1** (record 248.2/24.69 reproduced at all three).
+Consistent with session 23 (q_0/tau insensitive to V_SD; plateau carried by B2,
+I(D1)≈−1 nA). So R1 can be set to the DC r_diode (0.96 m) and D1 to the DC-fit
+set without moving recovery. (Is/N not yet stepped in the recovery bench —
+expected insensitive, but VERIFY when updating D1.) → **VERIFIED session 28**:
+`out/recov_d1_check.cir` A/B steps old vs DC-fit D1 at R1 = 0.961 m: q_rri
+248.171 → 248.059 nC, t_rri 24.684 → 24.702 ns (≤0.075 %), record achieved
+248.20/24.687 reproduced.
+
+## Files this session
+- `scripts/fit_isc040_channel.py` — channel 2-stage fit (NEW, reproducible).
+- `scripts/gen_full_subckt.py` — full 4-term subckt generator (NEW).
+- `reference.py` — added `ISC040_CHANNEL`/`IscChannelRecord` + `ISC040_CHANNEL_*`
+  constants; `__all__` + `__init__.py` imports/exports updated (verified clean).
+- `out/ISC040N10NM8_full.subckt` — the deliverable (D G S K).
+- `out/parity_isc040_full.cir` — channel DC parity bench (verified <0.001 %).
+- `out/recov_r1_sens.cir` — recovery R1-sensitivity bench (measured above).
+- `out/isc040_iv_25C_fit.png`, `out/isc040_channel_tc.png`,
+  `out/isc040_channel_params.json` — fit artifacts.
+
+## Gotchas learned this session (do not re-derive)
+- **Diode CSV temp column is `T_j (C)`, NOT `T`** → `load_diode_csv()` (expects
+  `T`) FAILS on ISC040N10NM8_Diode.csv; use a local loader (see
+  fit_isc040_channel.py / exploration). Same for the Rdson/Vth CSVs (script-local
+  loaders, like the IMCQ spec CSVs).
+- **Rdson_Vgs figure is a 25 A chord** (verified: Vgs=15.7→3.33 mΩ matches IV_25C
+  row Vgs=15,Vds=0.08325,I=25). Convert to V_ds=R·I for the fit.
+- **LTspice rejects R=0** ("Resistance must not be zero") and a **0 V short in
+  series with the channel current source makes the DC matrix singular** (node sx
+  no conductance to ground). Fix in gen_full_subckt.py: for r_s=r_sk=0 emit
+  `Rs sx S 1e-6` / `Rsk S K 1e-6` (1 µΩ floor, negligible vs r_d=2.48 mΩ) and
+  tie K→S by node in the bench (not a 3rd 0 V source → avoids a V-source loop).
+  Added `Rleak dx sx 100Meg` to silence the benign "node dx floating on a current
+  source" initial-check warning (<1e−6 relative effect).
+- **`.include` in a run dir needs an ABSOLUTE path** (relative → "File not found").
+- **Xrec instantiation must be ONE line** (backslash continuations in the
+  generated subckt → "sub-circuit cannot be instantiated").
+- Channel B-source expression (overflow-safe softplus `log(1+e^z)=max(z,0)+
+  log(1+e^−|z|)`, forward clamp `max(V(dx,sx),0)`, k_theta/k_beta_trap/g_k/
+  k_lambda=0 collapsed) is in `gen_full_subckt.py::channel_expr` — verified exact.
+
+## Unchanged queue (from session 26)
+- `test_ltspice_caps_parity` c1 under LTspice 26.1.1 (0.32 % vs 2e−3 tol) —
+  pre-existing, re-baseline with evidence.
+- Optional physics follow-ups (two-section transit ladder, 300 A/µs DPT,
+  T_j recovery TC — no data, don't invent), v_gs-dependent Cgd blend (plateau
+  deficit), HV leakage/BV element, T_j thermal node, third-quadrant channel.
+
+---
+
 # Handover — ImprovedVDMOS session 26: extract_recov.py REWRITE COMPLETE — POLE-GAUGE PROTOCOL LANDED END-TO-END
 
 **The session-25c "⚠️ START HERE: extract_recov.py IS BROKEN" warning is

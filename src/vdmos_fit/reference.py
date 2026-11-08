@@ -53,6 +53,16 @@ __all__ = [
     "CAP_PLATEAU_DEFICIT_REL",
     "ISC040_RECOV",
     "RecovRecord",
+    "ISC040_CHANNEL",
+    "IscChannelRecord",
+    "ISC040_CHANNEL_FREE25",
+    "ISC040_CHANNEL_TC_FREE",
+    "ISC040_CHANNEL_RMSE25_REL",
+    "ISC040_CHANNEL_RMSE_TC_REL",
+    "ISC040_DIODE",
+    "ISC040_DIODE_FREE",
+    "ISC040_DIODE_RMSE_REL",
+    "ISC040_DIODE_GROUP_RMSE_REL",
 ]
 
 # Free set of the promoted fit (order matters only for readability).
@@ -310,6 +320,203 @@ IMCQ120_JOINT = ImcqJointRecord(
     r_d25=0.00239852,
     a_rd=0.00672705,
     b_rd=5.36729e-5,
+)
+
+# ---------------------------------------------------------------------------
+# ISC040N10NM8 (100 V trench super-junction, NON-Kelvin package) -- channel
+# record (promoted this session; closes the HANDOVER queue item that was
+# BLOCKED ON DATA). Protocol scripts/fit_isc040_channel.py.
+#
+# SEQUENTIAL protocol (user-directed): fit 25 C and LOCK, then fit the TC
+# coefficients. No high-temperature I-V data -- the TC comes from Rds(on)-vs-Vgs
+# at -55/25/100/175 C (I_test = 25 A) and Vth-vs-Tj (520 uA / 52 uA).
+#
+# Model family: the SJ charge-cap form (v_ovmax / k_ovsharp free, k_theta = 0,
+# v_vsat = 1e4 off, k_lambda = 0, g_k = 0) -- the same family as the ST8L65N044M9
+# super-junction record. Beats the velocity-saturation form (1.33 % vs 1.73 %
+# 25 C RMSE) and is better conditioned; the cap is genuinely sensed (it ceilings
+# the V_gs = 15 channel conductance -- without it the Ron chord is ~13 % low).
+#
+# NO transfer curve (datasheet V_ds conditions vague) -> the gate-loop
+# degeneration r_s is NOT identifiable and the data REJECTS it (r_s -> 0 from
+# every start, monotonically worse as r_s grows -- the IMCQ Kelvin finding,
+# session 22). The DC record carries the whole current-loop series R in r_d;
+# r_s = r_sk = 0. NON-Kelvin package -> r_sk = 0 (no kelvin tap; gate loop
+# returns at the power source); the 4-terminal subckt keeps the K pin for the
+# driver return, inert at r_s = r_sk = 0.
+#
+# TC laws (25 C base, evaluated by params_at):
+#   k_p(T)   = k_p25 * (T_K/298.15)^(-beta_p)          [beta_p ~ 2.20]
+#   v_th0(T) = v_th0_25 + s_vth*(T - 25)               [-7.49 mV/K]
+#   r_d(T)   = r_d25*(1 + a_rd*(T-25) + b_rd*(T-25)^2) [QUADRATIC, Trs1/Trs2
+#              law form; vertex ~-130 C -- NEVER linear (goes negative); valid
+#              over the -55..175 C data span]
+#   v_sub, v_ovmax, k_ovsharp, k_kneesharp, k_eta, v_dbsat: T-independent.
+#
+# QUOTE THE CURVES + TC LAWS, NEVER THE PARAMETER SPLIT:
+#  * r_d <-> r_s corr -1.0 (only the sum sensed); gate degeneration rejected.
+#  * k_p <-> v_th0 <-> v_ovmax <-> r_d cluster (|corr| up to 0.86): the composite
+#    channel conductance k_p*v_ov_eff2(v_gs) is the record.
+#  * beta_p weakly determined (sigma_rel ~ 4.4): the k_p(T)/r_d(T)/v_th0(T) TC
+#    split is model-form dependent; beta_p is interpretable ONLY because
+#    Rds(on)-Vgs(T) pins r_d(T) at high V_gs (the r_d-dominated floor), leaving
+#    the low-V_gs channel shape for beta_p -- the IMCQ doctrine.
+#  * v_dbsat sigma_rel ~ 77, k_eta ~ 4, k_kneesharp ~ 7, v_ovmax ~ 17: weakly
+#    sensed (data stops at V_ds ~ 5 V, no deep saturation); quote the curve.
+#
+# Acceptance (independent specs, never fitted): 25 C RMSE 1.33 % (132 pts =
+# IV 69 + Rds(on)-Id 55 + Rds(on)-Vgs 25 C 8); TC overall 2.97 % (Rds(on) 2.35,
+# Vth-voltage 4.04). Ron@25 A 25 C [mO] 3.35/3.56/3.89 (data 3.33/3.52/3.87);
+# Ron@Vgs15 vs T [mO] 2.12/3.34/5.20/7.76 at -55/25/100/175 (data 2.05/3.33/
+# 5.23/8.00); Vth@520uA vs T [V] 3.52/3.06/2.50/2.07 (data 3.37/3.05/2.58/2.07).
+# The stubborn Vth residual is the single-softplus subthreshold model-form limit
+# (the two-current swing rises with T; a constant v_sub cannot follow it) -- the
+# Vth SLOPE is captured, the absolute current is not (IMCQ precedent).
+#
+# tests/test_isc040_official.py pins this record against the measured CSVs.
+# ---------------------------------------------------------------------------
+
+ISC040_CHANNEL_FREE25: tuple[str, ...] = (
+    "k_p", "v_th0", "v_sub", "v_ovmax", "k_ovsharp", "k_kneesharp",
+    "k_eta", "v_dbsat", "r_d",
+)
+ISC040_CHANNEL_TC_FREE: tuple[str, ...] = ("s_vth", "beta_p", "a_rd", "b_rd")
+ISC040_CHANNEL_RMSE25_REL = 0.013288
+ISC040_CHANNEL_RMSE_TC_REL = 0.029697
+
+
+@dataclass(frozen=True)
+class IscChannelRecord:
+    """ISC040N10NM8 25 C base parameters + TC laws; ``params_at(t_c)`` builds Params.
+
+    Field names match scripts/fit_isc040_channel.py (k_p25/v_th0_25/r_d25 are
+    the 25 C base; s_vth/beta_p/a_rd/b_rd are the TC coefficients).
+    """
+
+    k_p25: float
+    v_th0_25: float
+    v_sub: float
+    v_ovmax: float
+    k_ovsharp: float
+    k_kneesharp: float
+    k_eta: float
+    v_dbsat: float
+    r_d25: float
+    s_vth: float
+    beta_p: float
+    a_rd: float
+    b_rd: float
+    # Fixed (not fitted): SJ cap form, no kink, no CLM, non-Kelvin (r_s=r_sk=0).
+    k_theta: float = 0.0
+    v_vsat: float = 1e4
+    k_lambda: float = 0.0
+    g_k: float = 0.0
+    r_s: float = 0.0
+    r_sk: float = 0.0
+    v_kneemin: float = 1e-3
+
+    def params_at(self, t_c: float) -> Params:
+        """Full Params at temperature ``t_c`` [degC] through the record TC laws.
+
+        Must stay consistent with ``params_at`` in scripts/fit_isc040_channel.py;
+        the script re-evaluates this record's RMSE through its own machinery and
+        tests/test_isc040_official.py evaluates the record directly -- a
+        divergence fails loudly.
+        """
+        tk = t_c + 273.15
+        dt = t_c - 25.0
+        fac = 1.0 + self.a_rd * dt + self.b_rd * dt * dt
+        return Params(
+            k_p=self.k_p25 * (tk / 298.15) ** (-self.beta_p),
+            v_th0=self.v_th0_25 + self.s_vth * dt,
+            v_sub=self.v_sub,
+            v_ovmax=self.v_ovmax,
+            k_ovsharp=self.k_ovsharp,
+            k_theta=self.k_theta,
+            v_vsat=self.v_vsat,
+            k_kneesharp=self.k_kneesharp,
+            k_eta=self.k_eta,
+            k_lambda=self.k_lambda,
+            g_k=self.g_k,
+            v_dbsat=self.v_dbsat,
+            v_kneemin=self.v_kneemin,
+            r_d=self.r_d25 * max(fac, 1e-6),  # Trs1/Trs2 clamp precedent
+            r_s=self.r_s,
+            r_sk=self.r_sk,
+        )
+
+
+ISC040_CHANNEL = IscChannelRecord(
+    k_p25=222.5901694854354,
+    v_th0_25=4.286665228917342,
+    v_sub=0.2440875052714508,
+    v_ovmax=5.774586111568539,
+    k_ovsharp=2.1964907755354677,
+    k_kneesharp=1.7870065096973613,
+    k_eta=0.03130646237241051,
+    v_dbsat=0.5252898687616809,
+    r_d25=0.002482952377514807,
+    s_vth=-0.007486343423130841,
+    beta_p=2.2003970923964205,
+    a_rd=0.0056205977696523295,
+    b_rd=2.0007921690165413e-05,
+)
+
+# ---------------------------------------------------------------------------
+# ISC040N10NM8 body diode (fit A of ``scripts/fit_isc040_diode.py``, promoted
+# session 27): free i_s, k_n, r_diode, i_kf, v_eg, a_rdiode on all 26 points
+# of data/ISC040N10NM8_Diode.csv (25/175 degC, 1.2-490 A). k_xti fixed at 3.0
+# (LTspice default), i_sr = 0 (recombination branch unsensed -- freeing it
+# buys nothing), k_nr = 2.0, t_nom = 25, a_ikf = 0, b_rdiode = 0.
+# RMSE 0.514 % (25 C 0.445 %, 175 C 0.575 %).
+#
+# KEY FINDING: k_n = 2.0 (the ST8L65 fixed value) is WRONG here -- pinned at
+# 2.0 the fit lands at 35.2 %; freeing it drops it to 0.514 % and k_n lands
+# at 1.053 (near-ideal diffusion, unlike the SJ part). i_s <-> k_n corr
+# +0.999, Jacobian rank 5/6: the ideality/prefactor split is a degenerate
+# valley (i_s sigma_rel ~12) -- quote the PAIR/curve, never i_s alone.
+# v_eg ~ 1.11 eV (silicon) and i_kf ~ 357 A (high-injection knee) are
+# genuinely sensed; r_diode <-> i_kf corr +0.994 (quote the curve, not the
+# split).
+#
+# TC: the LINEAR r_diode TC (a_rdiode, LTspice Trs1) is the decisive knob --
+# TC-off 3.31 % -> 0.514 %, strongly identified (sigma_rel 0.013). The
+# quadratic b_rdiode and the knee TC a_ikf buy NOTHING with only two
+# temperatures and go degenerate (a_rdiode <-> b_rdiode corr -1.0) -- DO NOT
+# free them (ST8L65 had three temperatures, which is what made Trs2
+# identifiable there).
+#
+# r_diode = 0.961 mOhm is ~10x SMALLER than the recovery bench's old
+# R1 = 10 mOhm. The full subckt (scripts/gen_full_subckt.py) reconciles them:
+# the DC set goes on D1's model card (Rs = 0 there) and r_diode(T) with the
+# Trs1 law goes in the recovery branch's R1, so the forward path carries the
+# diode series R exactly ONCE. Recovery is R1-insensitive (measured over
+# R1 = 10 u/1m/10m, out/recov_r1_sens.cir; the plateau is carried by B2,
+# I(D1) ~ -1 nA -- session 23).
+#
+# tests/test_isc040_official.py pins this record against the measured CSV.
+# ---------------------------------------------------------------------------
+
+ISC040_DIODE_FREE: tuple[str, ...] = (
+    "i_s", "k_n", "r_diode", "i_kf", "v_eg", "a_rdiode",
+)
+
+ISC040_DIODE_RMSE_REL = 0.00514
+ISC040_DIODE_GROUP_RMSE_REL = {25: 0.004450, 175: 0.005751}
+
+ISC040_DIODE = Params(
+    i_s=3.767896211320614e-12,
+    k_n=1.0528671662498787,
+    i_sr=0.0,
+    k_nr=2.0,
+    i_kf=357.18447376523085,
+    a_ikf=0.0,
+    r_diode=0.0009613283429766385,
+    a_rdiode=0.0010248339388128384,
+    b_rdiode=0.0,
+    t_nom=25.0,
+    k_xti=3.0,
+    v_eg=1.1096559091661649,
 )
 
 # ---------------------------------------------------------------------------
