@@ -162,7 +162,7 @@ chords at −55/25/100/175 °C + Vth-vs-Tj voltage residual), pinned by
 25/175 °C; **`ISC040_RECOV`** — pole-gauge recovery (sessions 25a–25c).
 The full-device deliverable is `out/ISC040N10NM8_full.subckt`.
 Suite green, ruff clean — test totals drift with headless Tk skips, don't pin
-counts (199 tests at the session-28 snapshot; the caps-parity pin was
+counts (236 tests at the session-30 snapshot; the caps-parity pin was
 re-baselined on LTspice 26.1.1, see the sessions-27–28 section). Datasheet
 Figure 3 (typical output curves), the body-diode forward
 characteristics CSV, the IMCQ120R004M2H
@@ -1118,6 +1118,77 @@ three landed.
    `PULSE(...)`; `.tran Tstart` shifts the RAW axis to 0 but `.meas
    FROM/TO` stay ABSOLUTE (an absolute window with Tstart silently FAILs).
 
+## Release pipeline — input contract, presets, staged fit, one-command build (session 30, 2026-11-08)
+
+Six problems raised by the user (no unified driver; no input contract;
+protocol choices hardcoded; recovery doesn't eat CSVs; environment not
+pinned; forward-recovery params in the subckt unfitted) — Phases A–D
+landed; Phase E (GUI) pending.
+
+- **Phase A — input contract (`ingest.py`, 27 tests in `test_ingest.py`):**
+  4-column IV contract `NAME[unit]`. Grammar: unit in `[...]` or `(...)`;
+  name = case-insensitive, non-alnum stripped; unit case-SENSITIVE except
+  k/K and u/µ/μ fold; prefixes f p n u m (none) k M G T P; bases
+  V A F OHM/Ω C s sec; composite di/dt `A/<time>` ([MA/s] ≡ [A/µs]);
+  reverse-biased spellings NEGATE (V_sd→−v_ds, I_sd→−i_ds, V_sg→−v_gs);
+  per-FILE defaults (no V_ds column → V_ds = V_gs only for diode-connected
+  data, warned; no gate column → V_gs = 0; no temp column → ref_temp;
+  bare `T` is CELSIUS, never Kelvin-by-default); typed classification
+  IV/CAP/QG/RDS/VTH/REC; condition strings ("V_ds=20V,T_j=25C") parseable.
+  Regression test: all 18 repo data CSVs parse.
+- **Row-split doctrine (diode vs channel):** i_ds > 0 → channel;
+  i_ds < 0 with gate OFF → diode; i_ds < 0 with gate ON → third-quadrant
+  mirror data (reported, excluded from the diode fit).
+- **Phase B — presets + stages (`presets.py`, `stages.py`, 6 tests in
+  `test_stages.py`):** fit order channel@ref → diode@ref → TC. Presets
+  `trench | sj | sic` = the three official recipes (user mapping:
+  ISC040 = trench, ST8L65 = SJ, IMCQ120 = SiC; the cap-family choice
+  lives in the preset). TC residuals: Rds(on) chords as CURRENT at the
+  per-row test current (column > condition string > `rdson_i_test` arg),
+  Vth as VOLTAGE via brentq at v_ds = v_gs. Equivalence pin: the staged
+  refit reproduces the ISC040 record's s_vth/beta_p/a_rd/b_rd BIT-FOR-BIT
+  (rel 1e-6).
+- **Phase C — export engine (`export_subckt.py`):** parameterized
+  FULL/FAST builders (part name, channel p25 + TC, diode, recovery knobs,
+  cds/caps text, r_max); `scripts/gen_full_subckt.py` is now a thin
+  wrapper supplying the ISC040 records + its header docs.
+  `channel_expr_auto`: collapsed form (byte-identical to the pinned
+  ISC040 files) when k_theta = k_beta_trap = k_lambda = g_k = 0, else the
+  full-family transcription of `model.py` — NOT yet LTspice-parity-benched
+  for a non-collapsed fit; the export says so.
+- **B3 rule (user, session 30):** B3 is emitted ONLY with a non-zero
+  `r_max`; at r_max = 0 (the ISC040 record) the branch is R1 tied
+  straight to K and orphan node N001 is gone. Physics re-verified on the
+  regenerated pair — every bench number BIT-IDENTICAL to the session-29
+  pins (parity 332.8 ppm fwd / 7.5 ppm rev; diode fwd 26.5/25.6 ppm;
+  recovery q_rri 248.171/248.059 nC, t_rri 24.684/24.702 ns, i_fi_min
+  −18.436/−18.445 A; buck −0.022 V switch undershoot): the 1 µΩ B3 floor
+  was below the noise, exactly as the R1-insensitivity study predicted.
+  No re-pinning needed. Structure pins updated
+  (`test_isc040_official.py`: `R1 K Ki {Rs*(1+Trs1*(temp-Tnom))}`, no
+  B3/N001 in the netlist).
+- **Phase C — orchestrator (`release.py` + `scripts/build_part.py`):**
+  one command, CSVs → ingest → channel@ref → diode@ref → TC → caps
+  (+ c_gdmax from Qg via `extract_cmax`) → recovery (OPT-IN `--recovery`:
+  needs a REC CSV — Q_rr, t_rr, I_RM, I_sd, di/dt — and LTspice; drives
+  the `extract_recov.py` grid) → export. Export rule (user): recovery
+  extracted → FULL subckt; no recovery data → FAST subckt with a plain
+  diode and NO tt. Outputs: `out/<PART>_full|fast.subckt`,
+  `out/<PART>_caps.subckt`, `data/<PART>_cds_expr.txt`,
+  `out/<PART>_record.json` (params + per-stage rmse + warnings + library
+  versions). No diode data → generic placeholder card with a LOUD warning.
+- **Phase D — e2e golden test (`test_release_e2e.py`, 3 tests):** ISC040
+  CSVs → orchestrator → FAST subckt (no recovery CSV in repo → no tt,
+  no recovery network) + record JSON quality bands. `requirements.txt`:
+  floors (numpy ≥ 2.0, scipy ≥ 1.13, matplotlib ≥ 3.8) + verified stack
+  (Python 3.13.5, numpy 2.5.3, scipy 1.18.1, matplotlib 3.11.2, LTspice
+  26.1.1) + the scipy flat-valley drift note.
+- Suite: 236 tests green, ruff clean. **Phase E pending:** 5-column
+  Tkinter GUI over the orchestrator API (files/parse | parsed table |
+  params table with freed checkboxes + preset dropdown + fit buttons |
+  caps table + resolution knob | plots + save subckt); the displayNum
+  helper must be fixed for negative/zero values (log10 domain error).
+
 ## Open problems
 
 1. **k_lambda / v_dbsat unsensed (σ = inf) in the official fit** — *accepted, not a
@@ -1163,6 +1234,12 @@ three landed.
   `sign(v_ds)·i_ch_fwd(|v_ds|, v_gs)`; see the session-29 section.
   Residual (accepted): the mirror cannot capture V_gs modulating the
   diode's forward voltage.
+- **Unified driver / release pipeline — CLOSED (session 30)**:
+  `scripts/build_part.py PART data/*.csv --preset trench|sj|sic
+  [--recovery]` runs the whole protocol (ingest → channel@ref →
+  diode@ref → TC → caps/cmax → optional recovery → export) and writes
+  the subckt + record JSON; package API `vdmos_fit.release.build_part`.
+  See the session-30 section. Pending on top of it: the Phase-E GUI.
 - **Body-diode recovery — package-side state not built**: recovery exists
   as the behavioral LTspice network in the pole gauge (sessions 25a–25c:
   `DiodeRecov` + E1/R3/C3 transit-time pole, record `ISC040_RECOV` in
@@ -1217,7 +1294,8 @@ three landed.
   compiles but its symbolic derivative is garbage (~1e11 A) — hence the
   ramp-sum form. The full-device subckt (channel B source + diode +
   r_d/r_s wiring) LANDED sessions 27–28 for ISC040N10NM8 —
-  `scripts/gen_full_subckt.py` → `out/ISC040N10NM8_full.subckt`; the
+  `scripts/gen_full_subckt.py` (thin wrapper over the generic engine `vdmos_fit/export_subckt.py`
+ since session 30) → `out/ISC040N10NM8_full.subckt`; the
   diode part is LTspice-exact: `D(Is=… N=… Isr=… Nr=… Ikf=… Rs=…
   Tnom=… Xti=… Eg=…)`.
 - **CI**. (`notebooks/` is empty scaffolding.)

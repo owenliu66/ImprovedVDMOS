@@ -1,0 +1,15 @@
+# ImprovedVDMOS -- runtime floors (release pipeline, session 30).
+# Verified under: Python 3.13.5, numpy 2.5.3, scipy 1.18.1, matplotlib 3.11.2
+# (interpreter pinned for the test suite: tooling/engineering313).
+#
+# Fit drift note: flat-valley minima can shift a few percent between scipy
+# minor versions (documented in STATUS); pinned tests carry tolerance bands
+# for that. Use the newest scipy -- floors below are "known to work".
+#
+# LTspice: not pip-installable; the recovery extraction and the parity
+# benches need a local install (verified under LTspice 26.1.1). The
+# pipeline runs without LTspice for everything except --recovery.
+
+numpy>=2.0
+scipy>=1.13
+matplotlib>=3.8

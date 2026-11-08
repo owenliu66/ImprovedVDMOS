@@ -345,7 +345,12 @@ def test_generated_subckt_d1_branch_matches_record():
     assert ".model MyDiode D(Is=Is,Rs=0,N=N,Ikf=Ikf,Eg=Eg,Xti=Xti,Tnom=Tnom)" \
         in text, "D1 must carry the full DC set with Rs=0 (single series-R \
 count: r_diode(T) lives in R1 with the Trs1 law)"
-    assert "R1 N001 Ki {Rs*(1+Trs1*(temp-Tnom))}" in text
+    assert "R1 K Ki {Rs*(1+Trs1*(temp-Tnom))}" in text, \
+        "session 30: at r_max = 0 the branch is R1 tied straight to K"
+    net = "\n".join(ln for ln in text.splitlines()
+                    if not ln.startswith("*"))
+    assert "B3" not in net, "B3 only exists with a non-zero r_max (session 30)"
+    assert "N001" not in net, "orphan node N001 must go with B3"
 
 
 def test_generated_subckt_mirror_and_fast_variant():
