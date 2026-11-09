@@ -37,7 +37,7 @@ from .ingest import (
     load_tables,
     parse_condition,
 )
-from .ltspice import _rampsum_expr, cap_charge_tables, write_cap_subckt
+from .ltspice import _rampsum_expr, cap_charge_tables, export_cap_subckt
 from .params import Params
 from .presets import PRESETS, Preset
 from .stages import fit_channel_ref, fit_channel_tc, fit_diode_stage, third_quadrant_rows
@@ -271,35 +271,55 @@ def export_part(out_dir: str | Path, part: str, p25: Params, dio: Params,
                 recov: RecovParams | None, caps_model: CapModel,
                 n_sub: int = 12, rmse: dict | None = None,
                 warnings: list[str] | None = None, preset: str = "trench",
-                ref_temp: float = 25.0) -> tuple[ReleaseResult, list[str]]:
+                ref_temp: float = 25.0, *, caps_files: bool = True,
+                both_variants: bool = False) -> tuple[ReleaseResult,
+                                                      list[str]]:
     """Caps subckt + Cds expression + FULL/FAST subckt from current
     records. Export rule (user): recovery -> FULL; no recovery -> FAST,
     plain diode, no tt. n_sub is the ramp-sum table resolution knob.
+
+    caps_files=False writes ONLY the device subckt(s): the caps delta and
+    the Cds charge-master are embedded inline in them anyway, so the
+    standalone <part>_caps.subckt and data/<part>_cds_expr.txt artifacts
+    are skipped (GUI "Save subckt", user rule 2026-11-09).
+    both_variants=True additionally writes the FAST twin of a FULL export
+    with the pole-gauge storage mapped to tt = t_minor + t_pole/0.69
+    (same mapping as scripts/gen_full_subckt.py).
     Returns the result (warnings gain the FAST-rule note) + file list."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     res = ReleaseResult(part=part, preset=preset, ref_temp=ref_temp,
                         rmse=dict(rmse or {}), warnings=list(warnings or []))
-    caps_path = write_cap_subckt(caps_model, out / f"{part}_caps.subckt",
-                                 name=f"{part.lower()}_caps",
-                                 cgs_cgd_only=True, n_sub=n_sub)
-    caps_text = caps_path.read_text(encoding="utf-8")
+    caps_text = export_cap_subckt(caps_model, f"{part.lower()}_caps",
+                                  n_sub=n_sub, cgs_cgd_only=True)
     cds_q = "Q=" + _rampsum_expr(
         *cap_charge_tables(caps_model, n_sub=n_sub)["ds"])
-    (Path("data") / f"{part}_cds_expr.txt").write_text(
-        f"Cds D S {cds_q}\n", encoding="utf-8")
-    files = [str(caps_path)]
+    files = []
+    if caps_files:
+        caps_path = out / f"{part}_caps.subckt"
+        caps_path.write_text(caps_text, encoding="utf-8")
+        files.append(str(caps_path))
+        (Path("data") / f"{part}_cds_expr.txt").write_text(
+            f"Cds D S {cds_q}\n", encoding="utf-8")
+
+    def _write(name: str, text: str) -> None:
+        sub = out / name
+        sub.write_text(text, encoding="utf-8")
+        files.append(str(sub))
+
     if recov is not None:
-        text = build_full(part, p25, dio, recov, cds_q, caps_text,
-                          _generic_header(part, res, "FULL"))
-        name = f"{part}_full.subckt"
+        _write(f"{part}_full.subckt",
+               build_full(part, p25, dio, recov, cds_q, caps_text,
+                          _generic_header(part, res, "FULL")))
+        if both_variants:
+            tt = recov.t_minor + recov.t_pole / 0.69
+            _write(f"{part}_fast.subckt",
+                   build_fast(part, p25, dio, f"Cds D S {cds_q}", caps_text,
+                              _generic_header(part, res, "FAST"), tt=tt))
     else:
         res.warnings.append("no recovery data: FAST export, plain diode, "
                             "no tt (user rule 2026-11-08)")
-        text = build_fast(part, p25, dio, f"Cds D S {cds_q}", caps_text,
-                          _generic_header(part, res, "FAST"), tt=None)
-        name = f"{part}_fast.subckt"
-    sub = out / name
-    sub.write_text(text, encoding="utf-8")
-    files.append(str(sub))
+        _write(f"{part}_fast.subckt",
+               build_fast(part, p25, dio, f"Cds D S {cds_q}", caps_text,
+                          _generic_header(part, res, "FAST"), tt=None))
     return res, files

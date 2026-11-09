@@ -8,8 +8,9 @@
                -- fits run on a worker thread so the window stays live
   4. CAPS    : capacitance points + ramp-sum resolution knob (n_sub)
   5. EXPORT  : plots (IV measured-vs-model, caps), optional recovery
-               extraction (LTspice grid -- slow), Save subckt per the
-               export rule (recovery -> FULL, none -> FAST, no tt)
+               extraction (LTspice grid -- slow), Save subckt: folder
+               dialog, writes ONLY <part>_fast.subckt (+ _full.subckt
+               when recovery knobs exist) -- no caps/cds artifacts
 
 Thin shell: every number comes from vdmos_fit (ingest/presets/stages/
 release/export_subckt); nothing is re-implemented here.
@@ -764,13 +765,23 @@ class App:
                             "not fitted")
         if not self.dio_fitted:
             warnings.append("diode card is preset/manual values, not fitted")
+        # user rule 2026-11-09: pick the destination folder via a dialog;
+        # save ONLY the device subckts (FAST always, FULL when recovery
+        # knobs exist) -- the caps subckt and cds expression are embedded
+        # inline in them, no standalone artifacts.
+        part = self.part_name.get()
+        folder = filedialog.askdirectory(
+            parent=self.root,
+            title=f"Choose folder for the {part} subckt files")
+        if not folder:
+            self.status.set("save cancelled")
+            return
+        folder = Path(folder)
         # overwrite guard (session 30 field report: a GUI Save clobbered
         # the official ISC040 artifacts when the part name collided)
-        part = self.part_name.get()
-        suffix = "_full.subckt" if self.recov is not None else "_fast.subckt"
-        targets = [ROOT / "out" / f"{part}_caps.subckt",
-                   ROOT / "out" / f"{part}{suffix}",
-                   ROOT / "data" / f"{part}_cds_expr.txt"]
+        targets = [folder / f"{part}_fast.subckt"]
+        if self.recov is not None:
+            targets.append(folder / f"{part}_full.subckt")
         clash = [t for t in targets if t.exists()]
         if clash and not messagebox.askyesno(
                 "Overwrite?",
@@ -780,10 +791,11 @@ class App:
                 "regenerate it with scripts/gen_full_subckt.py instead.)"):
             return
         res, files = export_part(
-            ROOT / "out", part, p25, dio, self.recov, model,
+            folder, part, p25, dio, self.recov, model,
             n_sub=int(self.n_sub.get()), rmse=self.rmse,
             warnings=warnings, preset=self.preset_name.get(),
-            ref_temp=float(self.ref_temp.get()))
+            ref_temp=float(self.ref_temp.get()),
+            caps_files=False, both_variants=True)
         self._log(res.warnings)
         self.status.set("wrote " + ", ".join(Path(f).name for f in files))
         messagebox.showinfo("Saved", "\n".join(files))

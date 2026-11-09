@@ -1288,7 +1288,19 @@ landed; Phase E (GUI) pending.
    every 10 runs, identifiability steps) wired to the GUI status line;
    (4) the "Extract recovery (slow)" button moved to the bottom of
    column 4 (with the caps data it operates on).
-- Suite: 278 tests green, ruff clean.
+- Session-30 GUI round 6 (user rule 2026-11-09): "Save subckt" no
+  longer writes to out/ — it opens a FOLDER PICKER and saves ONLY the
+  device subckts into the chosen folder: <part>_fast.subckt always,
+  plus <part>_full.subckt when recovery knobs exist (the FAST twin
+  carries tt = t_minor + t_pole/0.69, the gen_full_subckt mapping).
+  NO standalone <part>_caps.subckt or cds_expr.txt: the caps delta and
+  Cds charge-master are embedded inline in every device subckt, so the
+  saved files are self-contained. Implemented via
+  export_part(caps_files=False, both_variants=True) — the CLI default
+  flags keep the old artifact set (pinned). Overwrite guard now checks
+  the picked folder's fast/full files. Cancel -> "save cancelled",
+  nothing written.
+- Suite: 281 tests green, ruff clean.
 
 ## Open problems
 
