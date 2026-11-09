@@ -54,15 +54,25 @@ def test_row_split_gate_off_vs_third_quadrant():
     assert len(ch.i_d) == 1                        # I > 0 only
 
 
-def test_resolve_test_current_sources():
+def test_resolve_test_current_sources(tmp_path):
     iv = load_table(DATA / "ISC040N10NM8_Rdson_Id_25C.csv")
     it = resolve_test_current(iv, None)
     assert (it > 0).all()
+    # session 30 (user data edit): Rdson_Vgs now carries I_d = 25 A in a
+    # column -- resolve succeeds straight from the column:
     iv2 = load_table(DATA / "ISC040N10NM8_Rdson_Vgs.csv")
-    with pytest.raises(Exception, match="test current unknown"):
-        resolve_test_current(iv2, None)
-    it2 = resolve_test_current(iv2, 25.0)
+    it2 = resolve_test_current(iv2, None)
     assert np.all(it2 == 25.0)
+    assert np.all(resolve_test_current(iv2, 25.0) == 25.0)
+    # the unknown-current raise path, pinned on a synthetic file (no I_d
+    # column, no condition text):
+    p = tmp_path / "nochord.csv"
+    p.write_text("index,V_gs,R_dson (mOhm),T_j (C)\n1,10,12.5,25\n",
+                 encoding="utf-8")
+    spec = load_table(p)
+    with pytest.raises(Exception, match="test current unknown"):
+        resolve_test_current(spec, None)
+    assert np.all(resolve_test_current(spec, 25.0) == 25.0)
 
 
 # ---- stage 1: channel @ 25 C --------------------------------------------
@@ -111,6 +121,59 @@ def test_fit_diode_stage_isc040():
 
 
 def test_sic_preset_skips_diode_without_data():
+    assert PRESETS["sic"].diode_free        # SiC diode support ENABLED
     iv = load_table(DATA / "IMCQ120R004M2H_IV_25C.csv")
     assert diode_rows(iv) is None       # all-positive IV: no diode rows
     assert fit_diode_stage([iv], PRESETS["sic"]) is None
+
+
+def test_v_ovmax_zero_when_not_free():
+    """User rule (session 30): the charge-cap term is OFF (v_ovmax = 0)
+    whenever v_ovmax is NOT in the free set -- a locked preset start
+    value must never leak into the export."""
+    iv = load_table(DATA / "ISC040N10NM8_IV_25C.csv")
+    rd = load_table(DATA / "ISC040N10NM8_Rdson_Vgs.csv")
+    free = tuple(n for n in PRESETS["trench"].channel_free25
+                 if n != "v_ovmax")
+    res = fit_channel_ref(iv, rd, PRESETS["trench"], free_override=free,
+                          multistart_limit=1, max_nfev=2000)
+    assert res.params.v_ovmax == 0.0
+
+
+def test_fit_channel_bounds_override_pins():
+    """GUI min/max columns reach the fitter: a tight v_dbsat ceiling
+    pins the fit at its upper bound (the optimum sits well above it).
+    A k_p ceiling was tried first and starved the package-R solve at
+    the 25 A chords -- extreme boxes can make the model unsolvable."""
+    iv = load_table(DATA / "ISC040N10NM8_IV_25C.csv")
+    rd = load_table(DATA / "ISC040N10NM8_Rdson_Vgs.csv")
+    res = fit_channel_ref(iv, rd, PRESETS["trench"],
+                          bounds_override={"v_dbsat": (0.1, 0.3)},
+                          multistart_limit=1, max_nfev=1500)
+    assert res.params.v_dbsat <= 0.3 * 1.001
+    assert res.bounds_used["v_dbsat"] == (0.1, 0.3)
+
+
+def test_fit_channel_ref_no_chords_at_ref_temp():
+    """Regression (GUI field report): a digitized Rds(on)-vs-T curve with
+    NO row exactly at ref temp (IMCQ: closest 16.0/32.1 C) must not crash
+    the r_d upper bound -- the bound is simply skipped."""
+    iv = load_table(DATA / "IMCQ120R004M2H_IV_25C.csv")
+    rd = load_table(DATA / "IMCQ120R004M2H_Rdson_Tj_185.2A.csv")
+    assert not np.any(np.isclose(rd.tj, 25.0))
+    res = fit_channel_ref(iv, rd, PRESETS["sic"], multistart_limit=2,
+                          max_nfev=4000)
+    assert np.isfinite(res.params.r_d) and res.params.r_d > 0.0
+    assert res.rmse_rel < 0.20          # regression target: no crash, sane fit
+
+
+def test_fit_channel_kelvin_ratio_constraint():
+    """Regression (GUI field report): freeing r_s AND r_sk must not crash
+    on the model guard r_sk <= r_s -- fit() optimises the ratio
+    f_sk = r_sk/r_s in [0, 1] (session-22 kelvin doctrine)."""
+    iv = load_table(DATA / "IMCQ120R004M2H_IV_25C.csv")
+    rd = load_table(DATA / "IMCQ120R004M2H_Rdson_Tj_185.2A.csv")
+    free = tuple(PRESETS["sic"].channel_free25) + ("r_s", "r_sk")
+    res = fit_channel_ref(iv, rd, PRESETS["sic"], free_override=free,
+                          multistart_limit=1, max_nfev=3000)
+    assert 0.0 <= res.params.r_sk <= res.params.r_s

@@ -54,6 +54,34 @@ def test_record_within_search_bounds():
         assert lo < v < hi, nm
 
 
+def test_weights_broadcast():
+    """Session-30 crash fix: the old fixed 4-tuple weights default made
+    strict zip() die for any point count other than 4 (GUI recovery fit
+    on a 1- or 2-row datasheet table). Weights now broadcast."""
+    from vdmos_fit.extract_recov import _weights
+    assert _weights(None, 2) == (1.0, 1.0)
+    assert _weights(None, 1) == (1.0,)
+    assert _weights((2.0,), 3) == (2.0, 2.0, 2.0)
+    assert _weights((1.0, 2.0), 2) == (1.0, 2.0)
+    with pytest.raises(ValueError):
+        _weights((1.0, 1.0, 1.0, 1.0), 2)
+
+
+def test_make_netlist_i_f_override():
+    """Session 30: the bench forward current comes from the datasheet
+    table (I_sd column), not a hardcode -- make_netlist takes a per-bench
+    i_f; the spec default (ISC040 record: 12.5 A) stays the fallback."""
+    net = make_netlist(ISC040, 1000.0, tau=ISC040_RECOV.tau,
+                       t_minor=ISC040_RECOV.t_minor,
+                       t_pole=ISC040_RECOV.t_pole)
+    assert ".param i_test=12.5 " in net
+    net2 = make_netlist(ISC040, 1000.0, tau=ISC040_RECOV.tau,
+                        t_minor=ISC040_RECOV.t_minor,
+                        t_pole=ISC040_RECOV.t_pole, i_f=3.5)
+    assert ".param i_test=3.5 " in net2
+    assert ".param i_test=12.5 " not in net2
+
+
 def test_bench_netlist_pole_gauge_structure():
     """The rendered bench must stay in the pole gauge: q_0 (the deleted
     gauge) and the pre-25b form must never return; the 25c doctrine

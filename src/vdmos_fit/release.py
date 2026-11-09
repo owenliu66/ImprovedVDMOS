@@ -174,32 +174,10 @@ def build_part(csv_paths: list[str | Path], part: str,
     if not caps:
         raise IngestError(part, "-", "cap CSV (Ciss/Coss/Crss) required "
                                      "for the subckt export")
-    ccs = CapCurveSet(
-        np.concatenate([t.v for t in caps]),
-        np.concatenate([t.c for t in caps]),
-        np.concatenate([np.full(len(t.v), t.kind) for t in caps]),
-        label="ingest",
-    )
-    model = build_cap_model(ccs)
-    if qgs:
-        fits = list(extract_cmax(model, _qg_curve(qgs),
-                                 r_ds_on=ch.params.r_d + ch.params.r_s))
-        good = [f for f in fits if getattr(f, "c_gdmax", None)]
-        if good:
-            cmax = float(np.median([f.c_gdmax for f in good]))
-            model = CapModel(model.tables, model.anchor,
-                             CapParams(c_gd0=model.params.c_gd0,
-                                       s_gd0=model.params.s_gd0,
-                                       c_gdmax=cmax))
-            res.rmse["cmax"] = cmax
-    caps_path = write_cap_subckt(model, out / f"{part}_caps.subckt",
-                                 name=f"{part.lower()}_caps",
-                                 cgs_cgd_only=True)
-    caps_text = caps_path.read_text(encoding="utf-8")
-    res.files.append(str(caps_path))
-    cds_q = "Q=" + _rampsum_expr(*cap_charge_tables(model)["ds"])
-    (Path("data") / f"{part}_cds_expr.txt").write_text(
-        f"Cds D S {cds_q}\n", encoding="utf-8")
+    model, cmax = caps_model_from_tables(caps, qgs,
+                                         ch.params.r_d + ch.params.r_s)
+    if cmax is not None:
+        res.rmse["cmax"] = cmax
 
     # ---- recovery (opt-in; needs LTspice) ---------------------------------
     recov: RecovParams | None = None
@@ -207,25 +185,110 @@ def build_part(csv_paths: list[str | Path], part: str,
         if rectbl is None:
             raise IngestError(part, "-", "--recovery given but no REC CSV "
                                          "(Q_rr,t_rr,I_RM,I_sd,di/dt)")
-        from .extract_recov import RecovSpec, extract
-        spec = RecovSpec(
-            part=part,
-            i_f=float(rectbl.i_f[0]), v_r=v_r,
-            points=tuple((float(dt / 1e6), float(q * 1e9), float(t * 1e9))
-                         for dt, q, t in zip(rectbl.didt, rectbl.qrr,
-                                             rectbl.trr, strict=True)),
-            is_diode=dio.i_s, rs_diode=dio.r_diode, n_diode=dio.k_n,
-            cds_expr_file=f"{part}_cds_expr.txt")
-        params, rtext = extract(spec)
-        recov = RecovParams(tau=params["tau"], t_minor=params["t_minor"],
-                            t_pole=params["t_pole"])
+        recov, rms, _ = recov_from_table(rectbl, part, dio, v_r=v_r)
         res.recov = {"tau": recov.tau, "t_minor": recov.t_minor,
-                     "t_pole": recov.t_pole, "rms_rel": params["rms_rel"]}
+                     "t_pole": recov.t_pole, "rms_rel": rms}
         res.warnings.append("recovery extracted from datasheet points "
                             "(LTspice grid)")
 
     # ---- export ------------------------------------------------------------
-    p25 = Params(**res.channel)
+    res2, files = export_part(out, part, Params(**res.channel), dio, recov,
+                              model, rmse=res.rmse, warnings=res.warnings,
+                              preset=res.preset, ref_temp=ref_temp)
+    res.warnings = res2.warnings
+    res.files = files
+
+    # ---- record + report ----------------------------------------------------
+    import scipy
+    res.meta = {"numpy": np.__version__, "scipy": scipy.__version__,
+                "generated": time.strftime("%Y-%m-%d %H:%M:%S")}
+    rec_path = out / f"{part}_record.json"
+    rec_path.write_text(json.dumps(asdict(res), indent=1, default=str),
+                        encoding="utf-8")
+    res.files.append(str(rec_path))
+    return res
+
+
+def caps_model_from_tables(caps: list[CapTable], qgs: list[QgTable],
+                           r_ds_on: float) -> tuple[CapModel, float | None]:
+    """CapModel from ingested CAP tables, re-spliced at the Qg-extracted
+    c_gdmax when QG tables exist. Returns (model, c_gdmax | None)."""
+    ccs = CapCurveSet(
+        np.concatenate([t.v for t in caps]),
+        np.concatenate([t.c for t in caps]),
+        np.concatenate([np.full(len(t.v), t.kind) for t in caps]),
+        label="ingest",
+    )
+    model = build_cap_model(ccs)
+    cmax = None
+    if qgs:
+        fits = list(extract_cmax(model, _qg_curve(qgs), r_ds_on=r_ds_on))
+        good = [f for f in fits if getattr(f, "c_gdmax", None)]
+        if good:
+            cmax = float(np.median([f.c_gdmax for f in good]))
+            model = CapModel(model.tables, model.anchor,
+                             CapParams(c_gd0=model.params.c_gd0,
+                                       s_gd0=model.params.s_gd0,
+                                       c_gdmax=cmax))
+    return model, cmax
+
+
+def recov_spec_from_table(rectbl: RecTable, part: str, dio: Params,
+                          v_r: float = 50.0):
+    """REC table -> RecovSpec (pure, no LTspice). The datasheet's OWN
+    forward current (the I_sd / I_F column) drives every bench -- one
+    i_f per row, never a hardcoded 12.5 A. spec.i_f alone is row 0's
+    value (reporting); i_f_points carries the per-row values when the
+    table's rows differ."""
+    from .extract_recov import RecovSpec
+    pts = tuple((float(dt / 1e6), float(q * 1e9), float(t * 1e9))
+                for dt, q, t in zip(rectbl.didt, rectbl.qrr, rectbl.trr,
+                                    strict=True))
+    i_f_row = tuple(float(abs(v)) for v in rectbl.i_f)
+    return RecovSpec(
+        part=part,
+        i_f=i_f_row[0], v_r=v_r,
+        points=pts,
+        i_f_points=i_f_row if len(set(i_f_row)) > 1 else (),
+        is_diode=dio.i_s, rs_diode=dio.r_diode, n_diode=dio.k_n,
+        cds_expr_file=f"{part}_cds_expr.txt")
+
+
+def recov_from_table(rectbl: RecTable, part: str, dio: Params,
+                     v_r: float = 50.0, progress=None):
+    """REC table -> RecovSpec -> extract_recov grid (runs LTspice; slow).
+    progress(msg) is forwarded to extract() for live status.
+    Returns (RecovParams, rms_rel [PERCENT] | None, report text)."""
+    from .extract_recov import extract
+    spec = recov_spec_from_table(rectbl, part, dio, v_r)
+    params, rtext = extract(spec, progress=progress)
+    rec = RecovParams(tau=params["tau"], t_minor=params["t_minor"],
+                      t_pole=params["t_pole"])
+    return rec, params.get("rms_rel"), rtext
+
+
+def export_part(out_dir: str | Path, part: str, p25: Params, dio: Params,
+                recov: RecovParams | None, caps_model: CapModel,
+                n_sub: int = 12, rmse: dict | None = None,
+                warnings: list[str] | None = None, preset: str = "trench",
+                ref_temp: float = 25.0) -> tuple[ReleaseResult, list[str]]:
+    """Caps subckt + Cds expression + FULL/FAST subckt from current
+    records. Export rule (user): recovery -> FULL; no recovery -> FAST,
+    plain diode, no tt. n_sub is the ramp-sum table resolution knob.
+    Returns the result (warnings gain the FAST-rule note) + file list."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    res = ReleaseResult(part=part, preset=preset, ref_temp=ref_temp,
+                        rmse=dict(rmse or {}), warnings=list(warnings or []))
+    caps_path = write_cap_subckt(caps_model, out / f"{part}_caps.subckt",
+                                 name=f"{part.lower()}_caps",
+                                 cgs_cgd_only=True, n_sub=n_sub)
+    caps_text = caps_path.read_text(encoding="utf-8")
+    cds_q = "Q=" + _rampsum_expr(
+        *cap_charge_tables(caps_model, n_sub=n_sub)["ds"])
+    (Path("data") / f"{part}_cds_expr.txt").write_text(
+        f"Cds D S {cds_q}\n", encoding="utf-8")
+    files = [str(caps_path)]
     if recov is not None:
         text = build_full(part, p25, dio, recov, cds_q, caps_text,
                           _generic_header(part, res, "FULL"))
@@ -238,14 +301,5 @@ def build_part(csv_paths: list[str | Path], part: str,
         name = f"{part}_fast.subckt"
     sub = out / name
     sub.write_text(text, encoding="utf-8")
-    res.files.append(str(sub))
-
-    # ---- record + report ----------------------------------------------------
-    import scipy
-    res.meta = {"numpy": np.__version__, "scipy": scipy.__version__,
-                "generated": time.strftime("%Y-%m-%d %H:%M:%S")}
-    rec_path = out / f"{part}_record.json"
-    rec_path.write_text(json.dumps(asdict(res), indent=1, default=str),
-                        encoding="utf-8")
-    res.files.append(str(rec_path))
-    return res
+    files.append(str(sub))
+    return res, files

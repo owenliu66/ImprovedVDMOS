@@ -23,6 +23,8 @@ subthreshold cannot reproduce.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from scipy.optimize import brentq, least_squares
 
@@ -30,7 +32,7 @@ from .data import CurveSet, DiodeCurveSet
 from .fit import FitResult, fit, fit_diode
 from .ingest import IngestError, IVTable, RdsSpec, VthSpec, parse_condition
 from .model import vdmos_id
-from .params import Params
+from .params import BOUNDS, Params
 from .presets import TC_HI, TC_LO, TC_START, Preset
 
 T0K = 298.15
@@ -103,28 +105,52 @@ def fit_channel_ref(iv: IVTable, rds_spec: RdsSpec | None, preset: Preset,
                     rdson_i_test: float | None = None,
                     r_d_upper: float | None = None,
                     multistart_limit: int | None = None,
-                    max_nfev: int = 8000) -> FitResult:
+                    max_nfev: int = 8000,
+                    free_override: tuple[str, ...] | None = None,
+                    bounds_override: dict[str, tuple[float, float]]
+                    | None = None,
+                    progress: Callable[[str], None] | None = None
+                    ) -> FitResult:
+    free = (tuple(free_override) if free_override
+            else preset.channel_free25)
     D = channel_rows(iv, ref_temp)
-    bounds: dict[str, tuple[float, float]] = {}
+    bounds: dict[str, tuple[float, float]] = dict(bounds_override or {})
     if rds_spec is not None:
         itest = resolve_test_current(rds_spec, rdson_i_test)
         D = _combine(D, rdson_chord_curves(rds_spec, itest, ref_temp))
         if r_d_upper is None:
             # physical ceiling: the smallest measured chord (r_d is only
-            # part of it) -- same discipline as the ISC040 datasheet bound
+            # part of it) -- same discipline as the ISC040 datasheet bound.
+            # A digitized Rds(on)-vs-T curve may have NO row exactly at
+            # ref temp (IMCQ: closest 16.0/32.1 C) -- then no bound from
+            # chords; the fit's default r_d bounds still apply.
             m = np.isclose(rds_spec.tj, ref_temp)
-            r_d_upper = float(np.min(rds_spec.rds[m] * itest[m]))
-    if r_d_upper is not None and "r_d" in preset.channel_free25:
-        bounds["r_d"] = (0.0, r_d_upper)
+            if np.any(m):
+                r_d_upper = float(np.min(rds_spec.rds[m] * itest[m]))
+    if r_d_upper is not None and "r_d" in free:
+        # physical ceiling: the smallest measured chord wins over any
+        # user-set max (the chord is data, the box is a guess)
+        lo, hi = bounds.get("r_d", BOUNDS["r_d"])
+        bounds["r_d"] = (float(lo), min(float(hi), r_d_upper))
     starts = preset.channel_multistart
     if multistart_limit is not None:
         starts = starts[:multistart_limit]
     best: FitResult | None = None
-    for s in starts:
-        start = Params().replace(**{**preset.channel_fixed,
-                                    **preset.channel_start, **s})
-        r = fit(D, start=start, free=preset.channel_free25,
-                weight="relative", max_nfev=max_nfev, bounds_overrides=bounds)
+    n_start = len(starts)
+    for si, s in enumerate(starts):
+        vals = {**preset.channel_fixed, **preset.channel_start, **s}
+        if "v_ovmax" not in free:
+            # user rule (session 30): the charge-cap term is OFF unless
+            # v_ovmax is actually fitted -- never export a locked
+            # start-value cap.
+            vals["v_ovmax"] = 0.0
+        start = Params().replace(**vals)
+        prog = (None if progress is None else
+                (lambda msg, _si=si, _n=n_start: progress(
+                    f"start {_si + 1}/{_n}: {msg}")))
+        r = fit(D, start=start, free=free,
+                weight="relative", max_nfev=max_nfev, bounds_overrides=bounds,
+                progress=prog)
         if best is None or r.rmse_rel < best.rmse_rel:
             best = r
     if best is None:
@@ -168,7 +194,8 @@ def model_vth(p25: Params, tc_c: float, itest: float, tc: dict) -> float:
 
 def fit_channel_tc(p25: Params, rds_spec: RdsSpec | None,
                    vth_spec: VthSpec | None, preset: Preset,
-                   rdson_i_test: float | None = None) -> dict:
+                   rdson_i_test: float | None = None,
+                   progress: Callable[[str], None] | None = None) -> dict:
     """TC-stage fit on Rds(on) chords (all T) + Vth specs. Names follow
     preset.tc_free (default s_vth, beta_p, a_rd, b_rd)."""
     if (rds_spec is None or not np.any(~np.isclose(rds_spec.tj, 25.0))) \
@@ -212,8 +239,15 @@ def fit_channel_tc(p25: Params, rds_spec: RdsSpec | None,
             if j not in pos:
                 x[j] = TC_START[j] if j < len(TC_START) else 0.0
         x[pos] = x4
-        return resid(x)
+        r = resid(x)
+        if progress is not None:
+            nfev[0] += 1
+            if nfev[0] % 25 == 0:
+                progress(f"{nfev[0]} evals, cost "
+                         f"{0.5 * float(np.dot(r, r)):.4g}")
+        return r
 
+    nfev = [0]
     sol = least_squares(resid4, x0, bounds=(lo, hi), method="trf",
                         x_scale="jac", max_nfev=6000, ftol=1e-13, xtol=1e-13,
                         gtol=1e-13)
@@ -237,14 +271,21 @@ def fit_channel_tc(p25: Params, rds_spec: RdsSpec | None,
 
 def fit_diode_stage(ivs: list[IVTable], preset: Preset,
                     multistart_limit: int | None = None,
-                    max_nfev: int = 8000) -> FitResult | None:
+                    max_nfev: int = 8000,
+                    free_override: tuple[str, ...] | None = None,
+                    bounds_override: dict[str, tuple[float, float]]
+                    | None = None,
+                    progress: Callable[[str], None] | None = None
+                    ) -> FitResult | None:
     """Fit the diode from every IV table's gate-off reverse rows.
 
     Returns None when the preset has no diode free set (SiC: no body-diode
     data) or no diode rows exist -- the caller exports the placeholder
     card with a loud warning.
     """
-    if not preset.diode_free:
+    free = (tuple(free_override) if free_override
+            else tuple(preset.diode_free))
+    if not free:
         return None
     sets = [d for d in (diode_rows(iv) for iv in ivs) if d is not None]
     if not sets:
@@ -254,13 +295,19 @@ def fit_diode_stage(ivs: list[IVTable], preset: Preset,
     if multistart_limit is not None:
         starts = starts[:multistart_limit]
     base = Params().replace(**{**preset.diode_fixed, **preset.diode_start})
+    bounds = {**preset.diode_bounds, **(bounds_override or {})}
     best: FitResult | None = None
-    for s in starts:
+    n_start = len(starts)
+    for si, s in enumerate(starts):
         # a start dict must never re-introduce a FIXED parameter
+        prog = (None if progress is None else
+                (lambda msg, _si=si, _n=n_start: progress(
+                    f"start {_si + 1}/{_n}: {msg}")))
         r = fit_diode(data, start=base.replace(**{k: v for k, v in s.items()
-                                                  if k in preset.diode_free}),
-                      free=preset.diode_free, weight="relative",
-                      max_nfev=max_nfev, bounds_overrides=preset.diode_bounds)
+                                                  if k in free}),
+                      free=free, weight="relative",
+                      max_nfev=max_nfev, bounds_overrides=bounds,
+                      progress=prog)
         if best is None or r.rmse_rel < best.rmse_rel:
             best = r
     return best

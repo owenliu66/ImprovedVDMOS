@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -82,6 +82,23 @@ class FitResult:
         return "\n".join(lines)
 
 
+def residuals_p(
+    p: Params,
+    data: CurveSet,
+    *,
+    i_d_floor: float = 1e-3,
+    weight: str = "relative",
+) -> np.ndarray:
+    """Residual vector for a ready-made Params (see :func:`residuals`)."""
+    model = vdmos_id(data.v_ds, data.v_gs, p)
+    err = model - data.i_d
+    if weight == "relative":
+        err = err / np.maximum(np.abs(data.i_d), i_d_floor)
+    elif weight != "abs":
+        raise ValueError(f"unknown weight {weight!r}")
+    return err
+
+
 def residuals(
     x: np.ndarray,
     free: Sequence[str],
@@ -98,14 +115,8 @@ def residuals(
     weight = "abs"      : Amperes; dominated by the high-current corner, which
         is what a Ron/Rds(on) spec cares about.
     """
-    p = unpack(x, free, base)
-    model = vdmos_id(data.v_ds, data.v_gs, p)
-    err = model - data.i_d
-    if weight == "relative":
-        err = err / np.maximum(np.abs(data.i_d), i_d_floor)
-    elif weight != "abs":
-        raise ValueError(f"unknown weight {weight!r}")
-    return err
+    return residuals_p(unpack(x, free, base), data, i_d_floor=i_d_floor,
+                       weight=weight)
 
 
 def fit(
@@ -117,6 +128,7 @@ def fit(
     max_nfev: int = 4000,
     verbose: bool = False,
     bounds_overrides: dict[str, tuple[float, float]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> FitResult:
     """Extract model parameters from a static I-V dataset.
 
@@ -125,26 +137,56 @@ def fit(
     (negative k_p, zero v_sub) where the model becomes singular. Pass
     `bounds_overrides` to widen individual bounds for an exploratory fit; the
     result records them so `FitResult.on_bounds()` can flag pinned parameters.
+
+    `progress(msg)` -- optional callback invoked every 25 function
+    evaluations with a convergence line ("N evals, cost X"), so a GUI can
+    show live progress during long fits.
+
+    With `r_sk` free the optimisation column is the RATIO f_sk = r_sk/r_s in
+    [0, 1] (session-22 kelvin doctrine): r_sk = f_sk * r_s is the downstream
+    segment of the source path, so the model guard 0 <= r_sk <= r_s can
+    never fire mid-fit. FitResult still reports r_sk itself; f_sk pinned at
+    its upper bound means the ideal kelvin tap (r_sk = r_s).
     """
     free = tuple(free)
+    rk = free.index("r_sk") if "r_sk" in free else None
+    if rk is not None:
+        bounds_overrides = {**(bounds_overrides or {}), "r_sk": (0.0, 1.0)}
     x0 = pack(start, free)
+    if rk is not None:
+        x0[rk] = (start.r_sk / start.r_s) if start.r_s > 0 else 0.0
     lo, hi = vector_bounds(free, bounds_overrides)
     x0 = np.clip(x0, lo + 1e-9, hi - 1e-9)
 
+    def expand(xv: np.ndarray) -> Params:
+        p = unpack(xv, free, start)
+        if rk is None:
+            return p
+        return p.replace(r_sk=float(np.clip(xv[rk], 0.0, 1.0)) * p.r_s)
+
+    nfev = [0]
+
+    def res_fun(xv: np.ndarray) -> np.ndarray:
+        r = residuals_p(expand(xv), data, weight=weight)
+        if progress is not None:
+            nfev[0] += 1
+            if nfev[0] % 25 == 0:
+                progress(f"{nfev[0]} evals, cost "
+                         f"{0.5 * float(np.dot(r, r)):.4g}")
+        return r
+
     sol = least_squares(
-        residuals,
+        res_fun,
         x0,
         bounds=(lo, hi),
-        args=(free, data, start),
-        kwargs={"weight": weight},
         method="trf",
         x_scale="jac",
         max_nfev=max_nfev,
         verbose=2 if verbose else 0,
     )
 
-    p = unpack(sol.x, free, start)
-    rel = residuals(sol.x, free, data, start, weight="relative")
+    p = expand(sol.x)
+    rel = residuals_p(p, data, weight="relative")
     table = {**BOUNDS, **(bounds_overrides or {})}
     return FitResult(
         params=p,
@@ -205,6 +247,7 @@ def fit_diode(
     max_nfev: int = 4000,
     verbose: bool = False,
     bounds_overrides: dict[str, tuple[float, float]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> FitResult:
     """Extract body-diode parameters from a multi-temperature diode dataset.
 
@@ -220,12 +263,21 @@ def fit_diode(
     lo, hi = vector_bounds(free, bounds_overrides)
     x0 = np.clip(x0, lo + 1e-9, hi - 1e-9)
 
+    nfev = [0]
+
+    def res_fun(xv: np.ndarray) -> np.ndarray:
+        r = diode_residuals(xv, free, data, start, weight=weight)
+        if progress is not None:
+            nfev[0] += 1
+            if nfev[0] % 25 == 0:
+                progress(f"{nfev[0]} evals, cost "
+                         f"{0.5 * float(np.dot(r, r)):.4g}")
+        return r
+
     sol = least_squares(
-        diode_residuals,
+        res_fun,
         x0,
         bounds=(lo, hi),
-        args=(free, data, start),
-        kwargs={"weight": weight},
         method="trf",
         x_scale="jac",
         max_nfev=max_nfev,

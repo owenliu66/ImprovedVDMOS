@@ -9,9 +9,10 @@ confirmed by the user 2026-11-08):
 * ``sj``     -- superjunction (ST8L65N044M9 recipe): k_lambda + r_s free
   (transfer curves make the gate-loop degeneration identifiable), diode
   with k_n FIXED at 2.0 and all three TCs free.
-* ``sic``    -- SiC/GaN (IMCQ120R044M2H recipe): trap-filling gain
-  k_beta_trap + k_theta + k_lambda free, cap off (v_ovmax = 0), no
-  body-diode data expected (stage skipped, placeholder card + warning).
+* ``sic``    -- SiC/GaN (IMCQ120R004M2H recipe): trap-filling gain
+  k_beta_trap + k_theta + k_lambda free, cap off (v_ovmax = 0), diode
+  support ENABLED (user, session 30: SiC parts do have body-diode data
+  sometimes) -- the stage still skips itself when no diode rows exist.
 
 Free sets are the official records' free sets; starts are generic
 datasheet-scale guesses with multi-start variation of the shape cluster
@@ -115,7 +116,8 @@ SJ = Preset(
 SIC = Preset(
     name="sic",
     note="SiC/GaN (IMCQ recipe): k_beta_trap + k_theta + k_lambda free, "
-         "cap off; body-diode stage skipped without diode CSVs",
+         "cap off; diode support enabled (trench-style free set) -- the "
+         "stage still skips itself when the CSVs carry no diode rows",
     channel_free25=("k_p", "v_th0", "v_sub", "k_beta_trap", "k_theta",
                     "k_kneesharp", "k_eta", "v_dbsat", "k_lambda", "r_d"),
     channel_fixed=dict(v_ovmax=0.0, g_k=0.0, v_vsat=1e4, r_s=0.0, r_sk=0.0),
@@ -126,7 +128,10 @@ SIC = Preset(
         dict(k_p=400, k_kneesharp=0.8, v_dbsat=1.5, k_lambda=0.001),
         dict(k_p=100, k_kneesharp=2.5, v_dbsat=0.3, k_lambda=0.008),
     ),
-    diode_free=(),
+    diode_free=("i_s", "k_n", "r_diode", "i_kf", "v_eg", "a_rdiode"),
+    diode_start=dict(_DIODE_START, v_eg=1.4),   # SiC junction, wider gap
+    diode_multistart=_DIODE_MULTISTART,
+    diode_bounds={"r_diode": (0.0, 0.050)},
 )
 
 PRESETS: dict[str, Preset] = {p.name: p for p in (TRENCH, SJ, SIC)}

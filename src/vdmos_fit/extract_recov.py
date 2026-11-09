@@ -81,6 +81,11 @@ class RecovSpec:
     v_r: float = 50.0                    # reverse voltage [V]
     # (di/dt [A/us], Qrr [nC], t_rr [ns]) -- t_rr = 10 % of I_RM window
     points: tuple = ((1000.0, 247.0, 25.0), (100.0, 36.0, 29.0))
+    # OPTIONAL per-point forward currents [A], aligned with points
+    # (session 30: datasheet recovery tables list their own I_F per row,
+    # often straight from the I_sd column -- never hardcode it). Empty =
+    # use i_f for every bench.
+    i_f_points: tuple = ()
     # subckt DC branch (already fitted by the diode protocol)
     is_diode: float = 1e-6
     rs_diode: float = 10e-3
@@ -238,13 +243,16 @@ def grid_points(spec: RecovSpec):
 
 def make_netlist(spec: RecovSpec, didt: float, *, tau: float | None = None,
                  t_minor: float | None = None, t_pole: float | None = None,
-                 label: str = "bench", steps: str | None = None) -> str:
+                 label: str = "bench", steps: str | None = None,
+                 i_f: float | None = None) -> str:
     """One bench netlist at one di/dt point.
 
     steps=None: single run, knob values passed literally via
     .param tau_p/tm_p/tp_p (tau/t_minor/t_pole required).
     steps=<text>: the step/param block is appended verbatim (the single
     index sweep from index_step_block); knob literals are ignored.
+    i_f: per-bench forward current override (datasheet tables list their
+    own I_F per row); None = spec.i_f.
     """
     if steps is None:
         if tau is None or t_minor is None or t_pole is None:
@@ -254,7 +262,8 @@ def make_netlist(spec: RecovSpec, didt: float, *, tau: float | None = None,
                  f".param tm_p={_spice_num(t_minor)}\n"
                  f".param tp_p={_spice_num(t_pole)}\n")
     return NETLIST_TMPL.format(
-        label=label, i_f=spec.i_f, didt=didt, v_r=spec.v_r,
+        label=label, i_f=spec.i_f if i_f is None else i_f,
+        didt=didt, v_r=spec.v_r,
         k_chg=spec.k_chg, r_max=spec.r_max,
         is_d=_spice_num(spec.is_diode), rs_d=_spice_num(spec.rs_diode),
         n_d=spec.n_diode, cds=_cds_clause(spec.cds_expr_file),
@@ -386,8 +395,13 @@ def surrogate_eval(c, x_log):
 class Bench:
     """One real bench evaluation at one di/dt point; results cached."""
 
-    def __init__(self, spec: RecovSpec, didt: float, workdir: str):
+    def __init__(self, spec: RecovSpec, didt: float, workdir: str,
+                 bench_i_f: float | None = None, counter: list | None = None,
+                 progress=None):
         self.spec, self.didt, self.workdir = spec, didt, workdir
+        self.i_f = bench_i_f
+        self.counter = counter      # shared LTspice-run tally (progress)
+        self.progress = progress
         self.cache = {}
 
     def measure(self, x_log):
@@ -397,8 +411,13 @@ class Bench:
         tau, tm, tp = (math.exp(v) for v in x_log)
         text, _ = run_ltspice(make_netlist(self.spec, self.didt, tau=tau,
                                            t_minor=tm, t_pole=tp,
-                                           label=f"b{self.didt:g}"),
+                                           label=f"b{self.didt:g}",
+                                           i_f=self.i_f),
                               self.workdir)
+        if self.counter is not None:
+            self.counter[0] += 1
+            if self.progress is not None and self.counter[0] % 10 == 0:
+                self.progress(f"{self.counter[0]} LTspice runs done")
         out = {
             "q_rri": _meas_value(text, "q_rri"),
             "t_rri": _meas_value(text, "t_rri"),
@@ -426,6 +445,27 @@ def _targets(spec: RecovSpec):
     return [(i, p[0], p[1], p[2]) for i, p in enumerate(spec.points)]
 
 
+def _bench_i_f(spec: RecovSpec, i: int) -> float | None:
+    """Per-point forward current from the datasheet table (None = the
+    spec's single i_f). Never a silent hardcode for CSV-driven specs."""
+    return spec.i_f_points[i] if spec.i_f_points else None
+
+
+def _weights(weights, n):
+    """Per-point weights broadcast to the number of datasheet points
+    (session-30 crash fix: a fixed 4-tuple default crashed strict zip()
+    for specs with any other point count)."""
+    if weights is None:
+        return (1.0,) * n
+    w = tuple(float(x) for x in weights)
+    if len(w) == 1:
+        return w * n
+    if len(w) != n:
+        raise ValueError(f"weights has {len(w)} entries but the spec has "
+                         f"{n} datasheet points")
+    return w
+
+
 def surrogate_solve(spec, surrogates, x_lo, x_hi, n_starts=12):
     """Multi-start least squares on the surrogate surface (instant).
     surrogates: {(bench, 'q'): c, (bench, 't'): c} from log_surrogate."""
@@ -451,17 +491,18 @@ def surrogate_solve(spec, surrogates, x_lo, x_hi, n_starts=12):
     return best.x, best.cost
 
 
-def polish(spec, benches, x0, weights=(1.0, 1.0, 1.0, 1.0), max_nfev=200):
+def polish(spec, benches, x0, weights=None, max_nfev=200):
     """TRF in log space on REAL runs. diff_step=0.03: measured optimum
     (module docstring); generous max_nfev because tau is a flat valley
     coupled to both other knobs. status==3 with tau far from the surrogate
     prediction means 'stopped on tolerance', not 'converged' -- the caller
     reports it, the multi-start + surrogate seed makes it unlikely."""
     tg = _targets(spec)
+    ws = _weights(weights, len(tg))
 
     def res(x):
         r = []
-        for (i, _didt, q, t), w in zip(tg, weights, strict=True):
+        for (i, _didt, q, t), w in zip(tg, ws, strict=True):
             m = benches[i].measure(x)
             if m is None:
                 r.extend([5.0 * w, 5.0 * w])
@@ -480,12 +521,13 @@ def polish(spec, benches, x0, weights=(1.0, 1.0, 1.0, 1.0), max_nfev=200):
 
 
 def polish_fix_one(spec, benches, x_opt, fixed_knob, fixed_val,
-                   weights=(1.0, 1.0, 1.0, 1.0)):
+                   weights=None):
     """Fix-and-refit identifiability (session-25b doctrine): hold knob
     `fixed_knob` at `fixed_val` (log-space; pass optimum x perturbation --
     fixing AT the optimum is tautological) and refit the two free knobs.
     Returns (rms_rel_pct, x)."""
     tg = _targets(spec)
+    ws = _weights(weights, len(tg))
     fixed = np.array(x_opt, dtype=float)
     fixed[fixed_knob] = fixed_val
     free_idx = [j for j in range(3) if j != fixed_knob]
@@ -495,7 +537,7 @@ def polish_fix_one(spec, benches, x_opt, fixed_knob, fixed_val,
         for j, k in enumerate(free_idx):
             x[k] = u[j]
         r = []
-        for (i, _didt, q, t), w in zip(tg, weights, strict=True):
+        for (i, _didt, q, t), w in zip(tg, ws, strict=True):
             m = benches[i].measure(x)
             if m is None:
                 r.extend([5.0 * w, 5.0 * w])
@@ -566,16 +608,25 @@ def plot_waveforms(waves, plot_path):
 
 def extract(spec: RecovSpec = ISC040, workdir: str | None = None,
             plot_path: str | None = None, identifiability: bool = True,
-            weights=(1.0, 1.0, 1.0, 1.0)):
+            weights=None, progress=None):
     """Full datasheet-driven extraction. Returns (params dict, report text).
+
+    progress(msg): live status callback (grid/polish milestones, LTspice
+    run tally) -- the GUI wires this to its status line.
 
     params: {"tau":.., "t_minor":.., "t_pole":.., "rms_rel":..,
              "per_point": [{didt, q_rri, t_rri, t_rri25, q_rr, t_rr, irm}, ...]}
+    rms_rel is ALREADY in percent (callers must not multiply by 100).
     """
     workdir = workdir or os.path.join(OUT, f"recov_extract_{spec.part.lower()}_run")
     os.makedirs(workdir, exist_ok=True)
+    if spec.i_f_points:
+        i_f_txt = "[" + ", ".join(f"{v:g}" for v in spec.i_f_points) \
+                  + "] A per point"
+    else:
+        i_f_txt = f"{spec.i_f:g} A"
     lines = [f"== DiodeRecov pole-gauge extraction: {spec.part} ==",
-             f"I_F={spec.i_f} A, V_R={spec.v_r} V; targets "
+             f"I_F={i_f_txt}, V_R={spec.v_r} V; targets "
              + ", ".join(f"{d:g} A/us -> {q} nC / {t} ns"
                          for d, q, t in spec.points)]
     names = ("tau", "t_minor", "t_pole")
@@ -586,9 +637,12 @@ def extract(spec: RecovSpec = ISC040, workdir: str | None = None,
     X = np.array(pts)
     Y = {}
     for i, didt, _, _ in tg:
+        if progress is not None:
+            progress(f"grid @ {didt:g} A/us: LTspice sweep running...")
         text, _ = run_ltspice(make_netlist(spec, didt,
                                            steps=index_step_block(spec),
-                                           label=f"grid{didt:g}"), workdir)
+                                           label=f"grid{didt:g}",
+                                           i_f=_bench_i_f(spec, i)), workdir)
         tab = parse_stepped(text)
         n = len(pts)
         for meas, key, scale in (("q_rri", "q", 1.0), ("t_rri", "t", 1e9)):
@@ -622,7 +676,10 @@ def extract(spec: RecovSpec = ISC040, workdir: str | None = None,
             r += (m["q_rri"] / q - 1) ** 2 + (m["t_rri"] * 1e9 / t - 1) ** 2
         return r
 
-    benches = [Bench(spec, p[0], workdir) for p in spec.points]
+    runs = [0]                     # shared LTspice-run tally for progress
+    benches = [Bench(spec, p[0], workdir, bench_i_f=_bench_i_f(spec, i),
+                     counter=runs, progress=progress)
+               for i, p in enumerate(spec.points)]
     grid_costs = [real_cost(p) for p in pts]
     x_grid = np.log(pts[int(np.argmin(grid_costs))])
     x_seed = np.array([0.1, 17e-9, 2e-9])   # session-25c verified seed
@@ -630,12 +687,17 @@ def extract(spec: RecovSpec = ISC040, workdir: str | None = None,
     # 4) polish on real runs, multi-start
     best = None
     for tag, x0 in (("surr", x_surr), ("grid", x_grid), ("seed", x_seed)):
+        if progress is not None:
+            progress(f"polish[{tag}] running on real benches "
+                     f"({runs[0]} LTspice runs so far)...")
         r = polish(spec, benches, x0, weights=weights)
         rms = 100.0 * math.sqrt(2.0 * r.cost / (2 * len(tg)))
         lines.append(f"polish[{tag}]: tau={math.exp(r.x[0]):.4g} "
                      f"t_minor={math.exp(r.x[1])*1e9:.3f} n "
                      f"t_pole={math.exp(r.x[2])*1e9:.3f} n "
                      f"RMS {rms:.3f} % nfev={r.nfev} status={r.status}")
+        if progress is not None:
+            progress(f"polish[{tag}] done: RMS {rms:.3f} %")
         if best is None or r.cost < best.cost:
             best = r
     x_opt = best.x
@@ -672,6 +734,9 @@ def extract(spec: RecovSpec = ISC040, workdir: str | None = None,
             return f"{v:.4g}" if k == 0 else f"{v*1e9:.3f} n"
         for k, nm in enumerate(names):
             for f in (0.5, 2.0):
+                if progress is not None:
+                    progress(f"identifiability: fix {nm} x{f:g} "
+                             f"({runs[0]} LTspice runs so far)...")
                 rms_fix, _ = polish_fix_one(spec, benches, x_opt, k,
                                             x_opt[k] + math.log(f),
                                             weights=weights)
@@ -692,9 +757,10 @@ def extract(spec: RecovSpec = ISC040, workdir: str | None = None,
     # 7) waveform plot (intrinsic vs terminal at each di/dt)
     if plot_path:
         waves = []
-        for _i, didt, _, _ in tg:
+        for i, didt, _, _ in tg:
             _, w = run_ltspice(make_netlist(spec, didt, tau=tau, t_minor=tm,
-                                            t_pole=tp, label=f"wave{didt:g}"),
+                                            t_pole=tp, label=f"wave{didt:g}",
+                                            i_f=_bench_i_f(spec, i)),
                                workdir, want_waveform=True)
             waves.append((didt, w))
         plot_waveforms(waves, plot_path)

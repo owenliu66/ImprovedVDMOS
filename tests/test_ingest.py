@@ -181,6 +181,19 @@ def test_rec_missing_column_clear_error(tmp_path):
                         [["1", "2"]]))
 
 
+def test_rec_irm_is_optional(tmp_path):
+    """Session 30: datasheets often omit I_RM (peak reverse recovery
+    current) -- the extraction measures it itself, so the column is now
+    optional and the table carries NaN."""
+    t = load_table(_csv(tmp_path, "rec.csv",
+                        ["Q_rr[nC]", "t_rr[ns]", "I_sd[A]", "di/dt[A/us]"],
+                        [["100", "50", "10", "100"]]))
+    assert isinstance(t, RecTable)
+    assert np.isnan(t.irm).all()
+    assert t.didt[0] == pytest.approx(100e6)   # 100 A/us
+    assert any("I_RM" in n for n in t.notes)
+
+
 def test_unknown_column_clear_error(tmp_path):
     with pytest.raises(IngestError, match="unknown column"):
         _iv(tmp_path, ["V_ds", "I_d", "banana"], [["1", "1", "1"]])
@@ -197,6 +210,64 @@ def test_parse_condition():
     assert parse_condition("V_ds=20V,T_j=25C") == {"vds": 20.0, "tj": 25.0}
     c = parse_condition("I_d=12.5A, V_ds=20V")
     assert c["ids"] == pytest.approx(12.5) and c["vds"] == 20.0
+
+
+# ---- condition-column data (IMCQ120R004M2H_Transfer.csv style) ---------
+
+def test_iv_condition_column_fills_vds_and_tj(tmp_path):
+    t = _iv(tmp_path, ["V_gs", "I_d", "condition"],
+            [["7.2", "31.8", '"V_ds=20V,T_j=25C"'],
+             ["8.3", "107.4", '"V_ds=20V,T_j=175C"'],
+             ["9.4", "217.7", '"V_ds=20V,T_j=200C"']],
+            ref_temp=25.0)
+    assert t.gate_known
+    assert np.all(t.vds == 20.0)
+    assert list(t.tj) == [25.0, 175.0, 200.0]
+    assert any("condition column" in n for n in t.notes)
+    # the old wrong defaults must be gone:
+    assert not any("diode-connected" in n for n in t.notes)
+    assert not any("defaulted to" in n for n in t.notes)
+
+
+def test_iv_condition_partial_rows_not_half_filled(tmp_path):
+    t = _iv(tmp_path, ["V_gs", "I_d", "condition"],
+            [["7.2", "31.8", '"V_ds=20V,T_j=25C"'], ["8.3", "107.4", ""]])
+    # per-row condition data must be ALL-or-nothing; partial falls back
+    # to the documented defaults (with their warnings):
+    assert np.all(t.vds == t.vgs)
+    assert np.all(t.tj == 25.0)
+    assert any("diode-connected" in n for n in t.notes)
+
+
+def test_condition_kelvin_canonical_celsius():
+    assert parse_condition("T_j=298.15K")["tj"] == pytest.approx(25.0)
+
+
+def test_rds_condition_column_fills_vgs_itest_tj(tmp_path):
+    t = load_table(_csv(tmp_path, "r.csv", ["R_dson (mOhm)", "condition"],
+                        [["12.5", '"V_gs=10V,I_d=25A,T_j=175C"'],
+                         ["11.0", '"V_gs=12V,I_d=25A,T_j=175C"']]))
+    assert isinstance(t, RdsSpec)
+    assert list(t.vgs) == [10.0, 12.0]
+    assert list(t.i_test) == [25.0, 25.0]
+    assert list(t.tj) == [175.0, 175.0]
+
+
+def test_vth_condition_column_fills_itest_tj(tmp_path):
+    t = load_table(_csv(tmp_path, "v.csv", ["V_th", "condition"],
+                        [["2.9", '"I_d=10mA,T_j=-55C"'],
+                         ["2.4", '"I_d=10mA,T_j=175C"']]))
+    assert isinstance(t, VthSpec)
+    assert list(t.tj) == [-55.0, 175.0]
+    assert list(t.i_test) == [0.01, 0.01]
+
+
+def test_transfer_csv_condition_data(tmp_path):
+    """The file that motivated the feature: one CSV, three T_j curves."""
+    t = load_table(DATA / "IMCQ120R004M2H_Transfer.csv")
+    assert isinstance(t, IVTable) and t.gate_known
+    assert np.all(t.vds == 20.0)
+    assert set(t.tj) == {25.0, 175.0, 200.0}
 
 
 # ---- real repo CSVs (regression) ---------------------------------------

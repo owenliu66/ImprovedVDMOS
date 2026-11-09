@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from vdmos_fit.release import build_part
+from vdmos_fit.release import build_part, recov_spec_from_table
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 OUT = Path(__file__).resolve().parents[1] / "out"
@@ -74,3 +74,32 @@ def test_record_json_roundtrip(release):
     assert data["part"] == "ISC040E2E"
     assert data["channel"]["k_p"] == pytest.approx(release.channel["k_p"])
     assert "scipy" in data["meta"]
+
+
+def test_recov_spec_uses_csv_currents():
+    """Session 30: the recovery fit takes its forward current from the
+    CSV's I_sd column (per row), never the RecovSpec 12.5 A hardcode."""
+    import numpy as np
+
+    from vdmos_fit.ingest import RecTable
+    from vdmos_fit.release import PLACEHOLDER_DIODE
+    rt = RecTable(qrr=np.array([247e-9, 36e-9]),
+                  trr=np.array([25e-9, 29e-9]),
+                  irm=np.array([np.nan, np.nan]),
+                  i_f=np.array([12.5, -25.0]),   # I_sd sign-normalized
+                  didt=np.array([1000e6, 100e6]),
+                  source="x")
+    spec = recov_spec_from_table(rt, "P", PLACEHOLDER_DIODE)
+    assert spec.i_f == 12.5
+    assert spec.i_f_points == (12.5, 25.0)
+    for got, want in zip(spec.points, ((1000.0, 247.0, 25.0),
+                                       (100.0, 36.0, 29.0)), strict=True):
+        for g, w in zip(got, want, strict=True):
+            assert g == pytest.approx(w)   # A/us, nC, ns rescaling
+    rt2 = RecTable(qrr=np.array([247e-9, 36e-9]),
+                   trr=np.array([25e-9, 29e-9]),
+                   irm=np.array([np.nan, np.nan]),
+                   i_f=np.array([12.5, 12.5]),
+                   didt=np.array([1000e6, 100e6]),
+                   source="x")
+    assert recov_spec_from_table(rt2, "P", PLACEHOLDER_DIODE).i_f_points == ()

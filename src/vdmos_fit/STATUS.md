@@ -162,7 +162,7 @@ chords at −55/25/100/175 °C + Vth-vs-Tj voltage residual), pinned by
 25/175 °C; **`ISC040_RECOV`** — pole-gauge recovery (sessions 25a–25c).
 The full-device deliverable is `out/ISC040N10NM8_full.subckt`.
 Suite green, ruff clean — test totals drift with headless Tk skips, don't pin
-counts (236 tests at the session-30 snapshot; the caps-parity pin was
+counts (250 tests at the session-30 snapshot; the caps-parity pin was
 re-baselined on LTspice 26.1.1, see the sessions-27–28 section). Datasheet
 Figure 3 (typical output curves), the body-diode forward
 characteristics CSV, the IMCQ120R004M2H
@@ -1183,11 +1183,112 @@ landed; Phase E (GUI) pending.
   floors (numpy ≥ 2.0, scipy ≥ 1.13, matplotlib ≥ 3.8) + verified stack
   (Python 3.13.5, numpy 2.5.3, scipy 1.18.1, matplotlib 3.11.2, LTspice
   26.1.1) + the scipy flat-valley drift note.
-- Suite: 236 tests green, ruff clean. **Phase E pending:** 5-column
-  Tkinter GUI over the orchestrator API (files/parse | parsed table |
-  params table with freed checkboxes + preset dropdown + fit buttons |
-  caps table + resolution knob | plots + save subckt); the displayNum
-  helper must be fixed for negative/zero values (log10 domain error).
+- **Phase E — GUI (`scripts/release_gui.py`, Tkinter):** five columns
+  over the package API (nothing re-implemented in the shell):
+  (1) file list + preset dropdown + ref temp + Parse with the ingest
+  report; (2) parsed tables + rows, displayNum-formatted; (3) channel
+  and diode parameter trees with click-to-toggle FREE checkboxes
+  (`free_override` added to `fit_channel_ref`/`fit_diode_stage`), fit
+  buttons running on a worker thread (window stays live); (4) caps
+  points + ramp-sum resolution knob `n_sub`; (5) plots (IV
+  measured-vs-model, caps) + optional recovery extraction (LTspice
+  grid, thread) + Save subckt through `release.export_part` — same
+  export rule (recovery -> FULL, none -> FAST, no tt). Reusable
+  release helpers `caps_model_from_tables` / `recov_from_table` /
+  `export_part` extracted so CLI and GUI share one path.
+  `displayNum` lives in `vdmos_fit.display`, FIXED for negatives/zero
+  (the log10 domain-error crash) — 14 tests in `test_display.py`.
+  Headless smoke: full 5-column build + ISC040 parse verified.
+- **Condition-column ingest (session 30, user request):** the IV/RDS/VTH
+  loaders now pull per-row V_ds, V_gs, T_j and I_test from a `condition`
+  column in the IMCQ120R004M2H_Transfer.csv style ("V_ds=20V,T_j=25C")
+  when no real column carries them — precedence column > condition >
+  documented default, ALL-or-nothing per file (partial condition rows
+  never half-fill a column); condition temperatures are canonical Celsius
+  ("T_j=298.15K" -> 25). This makes the Transfer file's three T_j curves
+  (25/175/200 °C at V_ds = 20 V, one CSV) parse correctly instead of
+  defaulting to ref-temp/diode-connected. User data edits land the same
+  doctrine as explicit columns: I_d=25 A into ISC040_Rdson_Vgs.csv,
+  I_ds=185.2 A into IMCQ_Rdson_Tj, T_j[C] into IMCQ_IV_175C.csv — the
+  resolve_test_current pin updated to match (the raise path is now pinned
+  on a synthetic no-current file). GUI Save gained an overwrite
+  confirmation after a part-name collision clobbered the official ISC040
+  artifacts once (regenerated via gen_full_subckt.py).
+- Kelvin fit crash fix (GUI field report, IMCQ with r_s/r_sk unlocked):
+  the model guard 0 <= r_sk <= r_s (model.py) fired MID-FIT because the
+  solver explored r_sk and r_s independently. fit() now adopts the
+  session-22 doctrine: when r_sk is free the optimisation column is the
+  RATIO f_sk = r_sk/r_s in [0, 1], r_sk = f_sk * r_s -- the guard is
+  structurally unfireable during a fit, FitResult still reports r_sk,
+  and f_sk pinned at 1 means the ideal kelvin tap. Numerically neutral
+  for every non-kelvin fit (all official records reproduce bit-for-bit);
+  GUI warns when r_sk is freed without r_s.
+- Session-30 GUI round 3 (five user changes): (1) SIC preset diode
+  support ENABLED (trench-style free set, v_eg start 1.4 for the wider
+  SiC gap, r_diode bounds to 50 mOhm) -- the stage still self-skips when
+  the IV tables carry no gate-off reverse rows; (2) parameters are now
+  hand-editable: double-click a value cell, engineering suffixes
+  accepted (display.parseEng, inverse of displayNum, pinned round-trip),
+  the trees are the live parameter state and fits write back into them;
+  (3) user rule v_ovmax = 0 whenever v_ovmax is NOT free -- enforced in
+  fit_channel_ref (start build, after multistart merge) and again in GUI
+  _save, so a locked preset start value can never leak a charge-cap term
+  into an export; (4) Plot diode button (measured diode rows vs the
+  card in the tree, per T_j) and (5) Plot TC button (measured
+  Rds(on)/Vth vs T_j and the TC law applied to the tree params; flat TC
+  when unfitted, brentq failures plotted as gaps). All plots now rebuild
+  their axes via fig.clear (no stale self.ax).
+- Session-30 GUI round 4 (user list): (1) TC plot now splits VERTICALLY
+  (Rds(on) top, Vth bottom); (2) the parameter trees gained editable
+  min/max columns (param|min|value|max|free) -- defaults from
+  params.BOUNDS (diode tree shows BOUNDS widened by the preset's
+  diode_bounds, i.e. what fit_diode_stage actually uses), edits flow
+  into bounds_overrides at fit time (stages fit_channel_ref/
+  fit_diode_stage gained bounds_override; the r_d chord ceiling wins
+  over any user max -- data beats guess; r_sk ratio bounds still win in
+  fit()); inverted boxes rejected with a clear error. NOTE: extreme
+  boxes CAN make the model unsolvable (a k_p ceiling starved the
+  package-R solve at the 25 A chords -> RuntimeError, not a graceful
+  pin) -- the pin test uses v_dbsat instead; (3) caps plot overlays the
+  EXPORTED model curves (c_gs/c_gd/c_ds branch functions over each
+  measured branch's range, labelled "model <kind> (exported)");
+  (4) fit progress: fit()/fit_diode() take progress(msg) called every
+  25 evals ("start i/n: N evals, cost X"), stages thread it through
+  all three fits, the GUI shows it live in the fit label; (5) I_RM is
+  now an OPTIONAL REC column (datasheets often omit the peak reverse
+  recovery current; the extraction measures i_fi_min itself) -- missing
+  column -> NaN + note; (6) recovery-fit zip crash FIXED: extract()/
+  polish()/polish_fix_one() had a fixed 4-tuple weights default that
+  strict-zip rejected for any other point count (the GUI hit it with a
+  1-2-row datasheet table) -- _weights() now broadcasts (None -> ones,
+  scalar -> replicated, exact length -> as-is, else clear ValueError).
+ - Recovery I_F doctrine (user, session 30): the extraction NEVER
+   hardcodes the forward current -- recov_spec_from_table (release.py,
+   new pure helper) builds the RecovSpec from the REC table, taking
+   I_F per row from the I_sd/I_F column (sign-normalized). RecovSpec
+   gained i_f_points (per-point, aligned with points; empty = single
+   i_f); make_netlist takes a per-bench i_f override, and extract()
+   passes it to the grid runs, the polish benches AND the waveform
+   runs; the report header prints the per-point list. The 12.5 A on
+   RecovSpec is only the ISC040 RECORD default (pinned netlist tests
+   unchanged).
+ - Session-30 GUI round 5: (1) CAPS PLOT DOCTRINE FIXED — plotting raw
+   branch functions against the measured V_ds axis is meaningless (the
+   gd branch is indexed by v_gd ~= -V_ds; gs/ds tables by V_ds; the
+   first overlay showed flat "model iss/rss" lines). The overlay must
+   RECOMBINE branches into the terminal capacitance the subckt
+   realizes: Ciss = c_gs(v) + c_gd(-v), Coss = c_ds(v) + c_gd(-v),
+   Crss = c_gd(-v); verified model-vs-measured max deviation 0.00 /
+   0.98 / 0.31 % (iss/oss/rss, ISC040 Cap_Vds). (2) RECOVERY RMS
+   DISPLAY BUG: extract() returns rms_rel ALREADY in percent; the GUI
+   multiplied by 100 again -> "103.55 %" for a healthy 1.04 % fit.
+   Fixed; the fitted tau/t_minor/t_pole are now also logged to the
+   report panel after extraction. (3) recovery extraction gained a
+   progress callback (grid sweeps, per-polish RMS, LTspice-run tally
+   every 10 runs, identifiability steps) wired to the GUI status line;
+   (4) the "Extract recovery (slow)" button moved to the bottom of
+   column 4 (with the caps data it operates on).
+- Suite: 278 tests green, ruff clean.
 
 ## Open problems
 
@@ -1239,7 +1340,8 @@ landed; Phase E (GUI) pending.
   [--recovery]` runs the whole protocol (ingest → channel@ref →
   diode@ref → TC → caps/cmax → optional recovery → export) and writes
   the subckt + record JSON; package API `vdmos_fit.release.build_part`.
-  See the session-30 section. Pending on top of it: the Phase-E GUI.
+  See the session-30 section. The Phase-E GUI (`scripts/release_gui.py`,
+  five columns, worker-thread fits) landed on top of it (session 30).
 - **Body-diode recovery — package-side state not built**: recovery exists
   as the behavioral LTspice network in the pole gauge (sessions 25a–25c:
   `DiodeRecov` + E1/R3/C3 transit-time pole, record `ISC040_RECOV` in

@@ -206,7 +206,8 @@ class VthSpec:
 class RecTable:
     qrr: np.ndarray        # coulombs
     trr: np.ndarray        # seconds
-    irm: np.ndarray        # amps (peak reverse -- needed for t_pole/tau)
+    irm: np.ndarray        # amps (peak reverse; OPTIONAL input -- NaN when
+                           # the CSV omits it; the fit measures it itself)
     i_f: np.ndarray        # amps (forward current before commutation)
     didt: np.ndarray       # A/s
     source: str
@@ -306,8 +307,21 @@ def _get(source: str, by_kind: dict, rows: list[dict], kind: str,
     return _col_data(rows, col)
 
 
+def _cond_vals(cond: list[dict[str, float]], key: str,
+               n: int) -> np.ndarray | None:
+    """Per-row values from parsed condition strings (IMCQ120R004M2H_-
+    Transfer.csv style: "V_ds=20V,T_j=25C" per row). None unless EVERY
+    row carries the key -- partial condition data must not half-fill a
+    column."""
+    if cond and len(cond) == n and all(key in c for c in cond):
+        return np.array([c[key] for c in cond], dtype=float)
+    return None
+
+
 def _tj_arr(source: str, by_kind: dict, rows: list[dict],
-            ref_temp: float) -> tuple[np.ndarray, list[str]]:
+            ref_temp: float,
+            cond: list[dict[str, float]] | None = None
+            ) -> tuple[np.ndarray, list[str]]:
     notes: list[str] = []
     if "tj" in by_kind:
         col = by_kind["tj"][0]
@@ -317,26 +331,41 @@ def _tj_arr(source: str, by_kind: dict, rows: list[dict],
             arr = arr - 273.15
             notes.append(f"{col.raw!r}: Kelvin converted to Celsius")
     else:
-        arr = np.full(len(rows), ref_temp)
-        notes.append(f"no temperature column: defaulted to {ref_temp:g} degC")
+        arr = _cond_vals(cond or [], "tj", len(rows))
+        if arr is not None:
+            notes.append("T_j taken from condition column")
+        else:
+            arr = np.full(len(rows), ref_temp)
+            notes.append(f"no temperature column: defaulted to "
+                         f"{ref_temp:g} degC")
     return arr, notes
 
 
 def _load_iv(source: str, by_kind: dict, rows: list[dict],
              notes: list[str], ref_temp: float) -> IVTable:
     ids = _get(source, by_kind, rows, "ids", True)
+    cond = [parse_condition(str(c)) for c in _cond_arr(source, by_kind, rows)]
     vgs = _get(source, by_kind, rows, "vgs", False)
     gate_known = vgs is not None
     if vgs is None:
-        vgs = np.zeros(len(rows))
-        notes.append("no gate column: V_gs = 0 (gate-off data, e.g. "
-                     "body-diode)")
+        vgs = _cond_vals(cond, "vgs", len(rows))
+        if vgs is not None:
+            gate_known = True
+            notes.append("V_gs taken from condition column")
+        else:
+            vgs = np.zeros(len(rows))
+            notes.append("no gate column: V_gs = 0 (gate-off data, e.g. "
+                         "body-diode)")
     vds = _get(source, by_kind, rows, "vds", False)
     if vds is None:
-        vds = vgs.copy()
-        notes.append("no V_ds column: defaulted to V_ds = V_gs "
-                     "(diode-connected)")
-    tj, tn = _tj_arr(source, by_kind, rows, ref_temp)
+        vds = _cond_vals(cond, "vds", len(rows))
+        if vds is not None:
+            notes.append("V_ds taken from condition column")
+        else:
+            vds = vgs.copy()
+            notes.append("no V_ds column: defaulted to V_ds = V_gs "
+                         "(diode-connected)")
+    tj, tn = _tj_arr(source, by_kind, rows, ref_temp, cond=cond)
     return IVTable(vgs, vds, ids, tj, gate_known, source,
                    (*notes, *tn))
 
@@ -383,32 +412,58 @@ def _load_qg(source: str, by_kind: dict, rows: list[dict],
 def _load_rds(source: str, by_kind: dict, rows: list[dict],
               notes: list[str]) -> RdsSpec:
     rds = _get(source, by_kind, rows, "rds", True)
+    cond = [parse_condition(str(c)) for c in _cond_arr(source, by_kind, rows)]
     vgs = _get(source, by_kind, rows, "vgs", False)
+    if vgs is None:
+        vgs = _cond_vals(cond, "vgs", len(rows))
+        if vgs is not None:
+            notes.append("V_gs taken from condition column")
     vgs = np.zeros(len(rows)) if vgs is None else vgs
     i_test = _get(source, by_kind, rows, "ids", False)
+    if i_test is None:
+        i_test = _cond_vals(cond, "ids", len(rows))
+        if i_test is not None:
+            notes.append("I_test taken from condition column")
     i_test = np.zeros(len(rows)) if i_test is None else i_test
     if i_test.max() == 0:
         notes.append("Rds(on) chord test current not in a column: resolve "
                      "from condition text or user input")
-    tj, tn = _tj_arr(source, by_kind, rows, 25.0)
-    cond = _cond_arr(source, by_kind, rows)
-    return RdsSpec(vgs, rds, i_test, tj, cond, source, (*notes, *tn))
+    tj, tn = _tj_arr(source, by_kind, rows, 25.0, cond=cond)
+    return RdsSpec(vgs, rds, i_test, tj, np.array(
+        [str(c) for c in _cond_arr(source, by_kind, rows)], dtype=object),
+        source, (*notes, *tn))
 
 
 def _load_vth(source: str, by_kind: dict, rows: list[dict],
               notes: list[str]) -> VthSpec:
     vth = _get(source, by_kind, rows, "vth", True)
-    i_test = _get(source, by_kind, rows, "ids", True)
-    tj, tn = _tj_arr(source, by_kind, rows, 25.0)
+    cond = [parse_condition(str(c)) for c in _cond_arr(source, by_kind, rows)]
+    i_test = _get(source, by_kind, rows, "ids", False)
+    if i_test is None:
+        i_test = _cond_vals(cond, "ids", len(rows))
+        if i_test is not None:
+            notes.append("I_test taken from condition column")
+    if i_test is None:
+        raise IngestError(source, "-", "missing required ids column")
+    tj, tn = _tj_arr(source, by_kind, rows, 25.0, cond=cond)
     return VthSpec(tj, vth, i_test, source, (*notes, *tn))
 
 
 def _load_rec(source: str, by_kind: dict, rows: list[dict],
               notes: list[str]) -> RecTable:
-    for req in ("qrr", "trr", "irm", "didt"):
+    for req in ("qrr", "trr", "didt"):
         if req not in by_kind:
             raise IngestError(source, "-", f"recovery CSV missing column "
                                            f"{req.upper()}")
+    # I_RM (peak reverse recovery current) is OPTIONAL (user, session 30:
+    # datasheets often omit it). The extraction measures its own peak
+    # reverse current internally -- irm is kept for reporting only.
+    if "irm" in by_kind:
+        irm = _get(source, by_kind, rows, "irm", True)
+    else:
+        irm = np.full(len(rows), np.nan)
+        notes.append("I_RM column absent (optional): the extraction "
+                     "produces the peak reverse current itself")
     if "if_" in by_kind:
         i_f = _get(source, by_kind, rows, "if_", True)
     elif "ids" in by_kind:
@@ -419,8 +474,8 @@ def _load_rec(source: str, by_kind: dict, rows: list[dict],
         raise IngestError(source, "-", "recovery CSV missing column "
                                        "I_F (or I_SD)")
     arrs = [_get(source, by_kind, rows, k, True)
-            for k in ("qrr", "trr", "irm", "didt")]
-    return RecTable(arrs[0], arrs[1], arrs[2], i_f, arrs[3], source, notes)
+            for k in ("qrr", "trr", "didt")]
+    return RecTable(arrs[0], arrs[1], irm, i_f, arrs[2], source, notes)
 
 
 def _cond_arr(source: str, by_kind: dict, rows: list[dict]) -> np.ndarray:
@@ -440,6 +495,7 @@ def parse_condition(text: str) -> dict[str, float]:
 
     ``"V_ds=20V,T_j=25C"`` -> ``{"vds": 20.0, "tj": 25.0}``;
     ``"I_d=12.5A, V_ds=20V"`` -> ``{"ids": 12.5, "vds": 20.0}``.
+    Temperatures are canonical CELSIUS ("T_j=298.15K" -> 25.0).
     Unknown names keep their normalized spelling.
     """
     out: dict[str, float] = {}
@@ -448,9 +504,13 @@ def parse_condition(text: str) -> dict[str, float]:
         kind, sign = _FIELD_BY_NAME.get(name, (name, 1))
         if kind.startswith("cap_"):
             kind = "cap"
+        unit = m.group("unit") or None
         scale = _parse_unit("condition", m.group("name") + m.group("unit"),
-                            kind, m.group("unit") or None)
-        out[kind] = float(m.group("val")) * scale * sign
+                            kind, unit)
+        if kind == "tj" and unit is not None and unit.strip() == "K":
+            out[kind] = float(m.group("val")) - 273.15  # canonical degC
+        else:
+            out[kind] = float(m.group("val")) * scale * sign
     return out
 
 
