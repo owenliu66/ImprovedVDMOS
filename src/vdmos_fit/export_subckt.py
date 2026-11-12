@@ -51,7 +51,23 @@ def _n(v: float) -> str:
     return f"{v * 1e9:.6g}n"
 
 
-def channel_expr(p: Params) -> str:
+# Channel temperature coefficients (the TC law in stages.params_at):
+#   k_p(T)   = k_p25 * ((T+273.15)/298.15)^(-beta_p)
+#   v_th0(T) = v_th0_25 + s_vth*(T-25)
+#   r_d(T)   = r_d25*(1 + a_rd*(T-25) + b_rd*(T-25)^2)
+# When any is non-zero the export emits them as .params referencing LTspice's
+# built-in TEMP (verified: TEMP tracks `.temp` in .params AND in B-source
+# expressions), so the subckt responds to `.temp`/`.step temp`. With all zero
+# the export stays byte-identical to the 25 C-only pinned files.
+_TC_NAMES = ("s_vth", "beta_p", "a_rd", "b_rd")
+
+
+def _tc_active(tc: dict | None) -> bool:
+    return bool(tc) and any(float(tc.get(n, 0.0)) for n in _TC_NAMES)
+
+
+def channel_expr(p: Params, kp_str: str | None = None,
+                 vth0_str: str | None = None) -> str:
     """Collapsed (SJ-cap) family: k_theta = k_beta_trap = g_k = k_lambda = 0.
 
     ONE flat B-source expression, mirror-symmetric third quadrant (the
@@ -67,16 +83,18 @@ def channel_expr(p: Params) -> str:
     dominates. Softplus overflow-safe: log(1+e^z) = max(z,0)+log(1+e^-|z|).
     """
     vd, vg = _vd_vg()
-    vth = _vth(vd, p)
+    kp = kp_str if kp_str is not None else f"{p.k_p:.6g}"
+    vth = _vth(vd, p, vth0_str)
     voveff = _vov(vd, vg, p, vth)
     vknee = f"max({voveff},{p.v_kneemin:.6g})"          # k_theta = 0
-    ich = (f"{p.k_p:.6g}*{voveff}*({_vdseff(vd, vknee, p)}"
+    ich = (f"{kp}*{voveff}*({_vdseff(vd, vknee, p)}"
            f"-0.5*{_vdseff(vd, vknee, p)}*{_vdseff(vd, vknee, p)}/{vknee})"
            f"/(1+{_vdseff(vd, vknee, p)}/{p.v_vsat:.6g})")
     return f"{_SGN}*{ich}"
 
 
-def channel_expr_full(p: Params) -> str:
+def channel_expr_full(p: Params, kp_str: str | None = None,
+                      vth0_str: str | None = None) -> str:
     """Full family: k_beta_trap gain, k_theta knee, k_lambda CLM, g_k kink.
 
     Direct transcription of model.py _channel_current (magnitudes inside,
@@ -84,8 +102,9 @@ def channel_expr_full(p: Params) -> str:
     non-collapsed fit -- the release report flags this.
     """
     vd, vg = _vd_vg()
+    kp = kp_str if kp_str is not None else f"{p.k_p:.6g}"
     kdb = f"tanh({vd}/{p.v_dbsat:.6g})"
-    vth = _vth(vd, p)
+    vth = _vth(vd, p, vth0_str)
     vov = _vov(vd, vg, p, vth)
     if p.k_beta_trap:
         vov = f"({vov}*(1+{p.k_beta_trap:.6g}*{vov}))"   # v_ov_eff2
@@ -100,7 +119,7 @@ def channel_expr_full(p: Params) -> str:
     else:
         vknee = f"max({vov},{p.v_kneemin:.6g})"
     vds = _vdseff(vd, vknee, p)
-    ich = (f"{p.k_p:.6g}*{vov}*({vds}-0.5*{vds}*{vds}/{vknee})"
+    ich = (f"{kp}*{vov}*({vds}-0.5*{vds}*{vds}/{vknee})"
            f"/(1+{vds}/{p.v_vsat:.6g})")
     if p.k_lambda:
         ich = f"({ich}*(1+{p.k_lambda:.6g}*{vd}*{kdb}))"
@@ -118,26 +137,35 @@ _SGN = "if(V(dx,sx)<0,-1,if(V(dx,sx)>0,1,0))"
 _KNEE_FLOOR = "1e-9"
 
 
-def _vth(vd: str, p: Params) -> str:
+def _vth(vd: str, p: Params, vth0_str: str | None = None) -> str:
     """DIBL-shifted threshold, mirroring model.py: the raw shift
     k_eta*v_ds*k_db is soft-capped at v_diblmax (the same power-law soft-min
     as the charge cap) so v_th >= v_th0 - v_diblmax for every v_ds. Without
     the cap a low-voltage fit extrapolates an unbounded linear DIBL that drives
     v_th negative at high v_ds, which pins the overdrive at the charge cap and
     freezes the saturation current (the exported-subckt 950 A failure).
-    v_diblmax = 0 -> the raw shift, byte-identical to the pre-cap export."""
+    v_diblmax = 0 -> the raw shift, byte-identical to the pre-cap export.
+
+    vth0_str is the threshold BASE expression: a literal when TC is off
+    (byte-identical) or the TC-aware param name 'vth0t' when TC is emitted."""
+    vth0 = vth0_str if vth0_str is not None else f"{p.v_th0:.6g}"
     shift = f"{p.k_eta:.6g}*{vd}*tanh({vd}/{p.v_dbsat:.6g})"
     if p.v_diblmax > 0.0:
         shift = (f"{shift}/pow(1+pow({shift}/{p.v_diblmax:.6g},"
                  f"{p.k_diblsharp:.6g}),1/{p.k_diblsharp:.6g})")
-    return f"({p.v_th0:.6g}-{shift})"
+    return f"({vth0}-{shift})"
 
 
-def channel_expr_auto(p: Params) -> str:
+def channel_expr_auto(p: Params, tc: dict | None = None) -> str:
     collapsed = (p.k_theta == 0.0 and p.k_beta_trap == 0.0
                  and p.k_lambda == 0.0 and p.g_k == 0.0
                  and p.v_diblmax == 0.0 and p.k_kneeform == 0.0)
-    return channel_expr(p) if collapsed else channel_expr_full(p)
+    if _tc_active(tc):
+        kp_str, vth0_str = "kp", "vth0t"
+    else:
+        kp_str = vth0_str = None
+    return (channel_expr(p, kp_str, vth0_str) if collapsed
+            else channel_expr_full(p, kp_str, vth0_str))
 
 
 def _vd_vg() -> tuple[str, str]:
@@ -164,8 +192,14 @@ def _vdseff(vd: str, vknee: str, p: Params) -> str:
             f"1/{p.k_kneesharp:.6g})")
 
 
-def device_common(p25: Params, caps_name: str) -> str:
-    """Channel + package R + caps delta block (shared by both variants)."""
+def device_common(p25: Params, caps_name: str,
+                  tc: dict | None = None) -> str:
+    """Channel + package R + caps delta block (shared by both variants).
+
+    tc carries the channel temperature coefficients (s_vth/beta_p/a_rd/b_rd).
+    When any is non-zero, k_p(T)/v_th0(T)/r_d(T) are emitted as .params that
+    reference LTspice's built-in TEMP, so the subckt responds to `.temp`. With
+    tc off/zero the block is byte-identical to the 25 C-only pinned files."""
     # LTspice rejects R=0 and a 0 V short in series with the channel current
     # source makes the DC matrix singular (node sx has no conductance to
     # ground). Stand in for the exact 0 with a 1 uOhm floor.
@@ -173,16 +207,32 @@ def device_common(p25: Params, caps_name: str) -> str:
                else "Rs  sx S   1e-6")
     rsk_line = (f"Rsk sx K   {p25.r_sk:.6g}" if p25.r_sk > 0
                 else "Rsk S K    1e-6")
-    chan = f"Bch dx sx I={channel_expr_auto(p25)}"
+    if _tc_active(tc):
+        dt = "(TEMP-25)"
+        tc_block = (
+            "* ---- channel temperature coefficients: k_p(T), v_th0(T), "
+            "r_d(T) ----\n"
+            "* reference LTspice's built-in TEMP (tracks `.temp`); 25 C base.\n"
+            f".param kp={{{p25.k_p:.6g}*pow((TEMP+273.15)/298.15,"
+            f"-{tc['beta_p']:.6g})}}\n"
+            f".param vth0t={{{p25.v_th0:.6g}+({tc['s_vth']:.6g})*{dt}}}\n"
+            f".param rdt={{{p25.r_d:.6g}*(1+{tc['a_rd']:.6g}*{dt}"
+            f"+{tc['b_rd']:.6g}*{dt}*{dt})}}\n")
+        chan = f"Bch dx sx I={{{channel_expr_auto(p25, tc)}}}"
+        rd = "{rdt}"
+    else:
+        tc_block = ""
+        chan = f"Bch dx sx I={channel_expr_auto(p25)}"
+        rd = f"{p25.r_d:.6g}"
     return f"""* ---- intrinsic channel (model.py expression) ----
 * ONE flat B-source expression; mirror-symmetric third quadrant (session 29).
 * Buffered helper nodes were tried and measured WORSE (see channel_expr).
-{chan}
+{tc_block}{chan}
 * high-Z leak across the channel: silences the "node dx floating on a current
 * source" initial-check warning; 100 MOhm changes i_d by <1e-6 relative.
 Rleak dx sx 100Meg
 * ---- package series R (channel path only; diode bypasses) ----
-Rd  D  dx  {p25.r_d:.6g}
+Rd  D  dx  {rd}
 {rs_line}
 {rsk_line}
 * ---- capacitance delta: Cgs/Cgd at terminals ----
@@ -191,7 +241,8 @@ Xcaps G D S {caps_name}
 
 
 def build_full(part: str, p25: Params, dio: Params, rec: RecovParams,
-               cds_q_expr: str, caps_text: str, header: str) -> str:
+               cds_q_expr: str, caps_text: str, header: str,
+               tc: dict | None = None) -> str:
     """FULL: body diode + DiodeRecov. cds_q_expr = the bare 'Q=...' clause
     (the Cds charge-master lives INSIDE the recovery branch at Ki-A)."""
     xrec_params = " ".join([
@@ -207,7 +258,7 @@ def build_full(part: str, p25: Params, dio: Params, rec: RecovParams,
     diode_note = ("* ---- body diode + recovery: anode = source, cathode = "
                   "drain, at terminals ----")
     device = f""".subckt {part} G D S K
-{device_common(p25, f"{part.lower()}_caps")}{diode_note}
+{device_common(p25, f"{part.lower()}_caps", tc)}{diode_note}
 {xrec}
 .ends {part}
 
@@ -248,7 +299,7 @@ C3 q_j 0 {_n(rec.t_pole)}
 
 def build_fast(part: str, p25: Params, dio: Params, cds_line: str,
                caps_text: str, header: str,
-               tt: float | None = None) -> str:
+               tt: float | None = None, tc: dict | None = None) -> str:
     """FAST: plain body diode; tt only when recovery knobs justify it.
 
     cds_line is the full instance line 'Cds D S Q=...' (moved to the D-S
@@ -264,7 +315,7 @@ def build_fast(part: str, p25: Params, dio: Params, cds_line: str,
     diode_note = ("* ---- body diode: plain D, series R in the card "
                   "(single count) ----")
     device = f""".subckt {part} G D S K
-{device_common(p25, f"{part.lower()}_caps")}{diode_note}
+{device_common(p25, f"{part.lower()}_caps", tc)}{diode_note}
 D1 s d MyDiode
 {dio_card}
 * ---- Cds charge-master at the D-S terminals (x = V(d,s) = v_ds) ----

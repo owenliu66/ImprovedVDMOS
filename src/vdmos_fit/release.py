@@ -194,7 +194,8 @@ def build_part(csv_paths: list[str | Path], part: str,
     # ---- export ------------------------------------------------------------
     res2, files = export_part(out, part, Params(**res.channel), dio, recov,
                               model, rmse=res.rmse, warnings=res.warnings,
-                              preset=res.preset, ref_temp=ref_temp)
+                              preset=res.preset, ref_temp=ref_temp,
+                              tc=getattr(res, "tc", None))
     res.warnings = res2.warnings
     res.files = files
 
@@ -271,7 +272,8 @@ def export_part(out_dir: str | Path, part: str, p25: Params, dio: Params,
                 recov: RecovParams | None, caps_model: CapModel,
                 n_sub: int = 12, rmse: dict | None = None,
                 warnings: list[str] | None = None, preset: str = "trench",
-                ref_temp: float = 25.0, *, caps_files: bool = True,
+                ref_temp: float = 25.0, tc: dict | None = None, *,
+                caps_files: bool = True,
                 both_variants: bool = False) -> tuple[ReleaseResult,
                                                       list[str]]:
     """Caps subckt + Cds expression + FULL/FAST subckt from current
@@ -310,16 +312,18 @@ def export_part(out_dir: str | Path, part: str, p25: Params, dio: Params,
     if recov is not None:
         _write(f"{part}_full.subckt",
                build_full(part, p25, dio, recov, cds_q, caps_text,
-                          _generic_header(part, res, "FULL")))
+                          _generic_header(part, res, "FULL"), tc=tc))
         if both_variants:
             tt = recov.t_minor + recov.t_pole / 0.69
             _write(f"{part}_fast.subckt",
                    build_fast(part, p25, dio, f"Cds D S {cds_q}", caps_text,
-                              _generic_header(part, res, "FAST"), tt=tt))
+                              _generic_header(part, res, "FAST"), tt=tt,
+                              tc=tc))
     else:
         res.warnings.append("no recovery data: FAST export, plain diode, "
                             "no tt (user rule 2026-11-08)")
         _write(f"{part}_fast.subckt",
                build_fast(part, p25, dio, f"Cds D S {cds_q}", caps_text,
-                          _generic_header(part, res, "FAST"), tt=None))
+                          _generic_header(part, res, "FAST"), tt=None,
+                          tc=tc))
     return res, files

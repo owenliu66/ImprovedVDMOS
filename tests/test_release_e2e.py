@@ -58,7 +58,13 @@ def test_fast_subckt_tokens(release, tmp_path_factory):
     net = "\n".join(ln for ln in text.splitlines()
                     if not ln.startswith("*"))
     assert ".subckt ISC040E2E G D S K" in net
-    assert "Bch dx sx I=if(V(dx,sx)<0,-1,if(V(dx,sx)>0,1,0))*" in net
+    # the release protocol runs the TC stage, so the channel is emitted
+    # temperature-aware: a braced B-source using kp/vth0t, the .param TC
+    # block referencing LTspice TEMP, and Rd driven by {rdt} (session 32 --
+    # the subckt used to be 25 C-only, so `.temp` did nothing).
+    assert "Bch dx sx I={if(V(dx,sx)<0,-1,if(V(dx,sx)>0,1,0))*kp*" in net
+    assert ".param kp={" in net and ".param vth0t={" in net
+    assert ".param rdt={" in net and "Rd  D  dx  {rdt}" in net
     assert "D1 s d MyDiode" in net
     assert ",tt=" not in net, "no recovery data -> NO tt (user rule)"
     assert "Xrec" not in net and "DiodeRecov" not in net

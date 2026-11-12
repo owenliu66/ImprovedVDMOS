@@ -973,7 +973,7 @@ class App:
             folder, part, p25, dio, self.recov, model,
             n_sub=int(self.n_sub.get()), rmse=self.rmse,
             warnings=warnings, preset=self.preset_name.get(),
-            ref_temp=float(self.ref_temp.get()),
+            ref_temp=float(self.ref_temp.get()), tc=dict(self.tc),
             caps_files=False, both_variants=True)
         self._log(res.warnings)
         self.status.set("wrote " + ", ".join(Path(f).name for f in files))
