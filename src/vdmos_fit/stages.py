@@ -109,6 +109,7 @@ def fit_channel_ref(iv: IVTable, rds_spec: RdsSpec | None, preset: Preset,
                     free_override: tuple[str, ...] | None = None,
                     bounds_override: dict[str, tuple[float, float]]
                     | None = None,
+                    start_override: dict[str, float] | None = None,
                     progress: Callable[[str], None] | None = None
                     ) -> FitResult:
     free = (tuple(free_override) if free_override
@@ -132,13 +133,22 @@ def fit_channel_ref(iv: IVTable, rds_spec: RdsSpec | None, preset: Preset,
         # user-set max (the chord is data, the box is a guess)
         lo, hi = bounds.get("r_d", BOUNDS["r_d"])
         bounds["r_d"] = (float(lo), min(float(hi), r_d_upper))
-    starts = preset.channel_multistart
+    starts = list(preset.channel_multistart)
     if multistart_limit is not None:
         starts = starts[:multistart_limit]
+    if start_override is not None:
+        # Interactive GUI: honour the user's live values as the FIRST start
+        # verbatim (this is what carries a knob the preset never knew about --
+        # e.g. k_kneeform -- through the fit instead of the preset default),
+        # then keep the preset multistart deltas on top of that base for
+        # robustness. Without start_override the official protocol is unchanged.
+        starts = [dict()] + starts
+    base = (start_override if start_override is not None
+            else preset.channel_start)
     best: FitResult | None = None
     n_start = len(starts)
     for si, s in enumerate(starts):
-        vals = {**preset.channel_fixed, **preset.channel_start, **s}
+        vals = {**preset.channel_fixed, **base, **s}
         if "v_ovmax" not in free:
             # user rule (session 30): the charge-cap term is OFF unless
             # v_ovmax is actually fitted -- never export a locked

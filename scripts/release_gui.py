@@ -160,6 +160,14 @@ class App:
         self.part_name = tk.StringVar(value="MYFET")
         self.n_sub = tk.IntVar(value=12)
         self.status = tk.StringVar(value="pick CSVs and Parse")
+        # plot axis controls (session 31): blank range = autoscale, scale
+        # "auto" = keep the plot's own default (e.g. caps are log-y).
+        self.ax_xmin = tk.StringVar(value="")
+        self.ax_xmax = tk.StringVar(value="")
+        self.ax_ymin = tk.StringVar(value="")
+        self.ax_ymax = tk.StringVar(value="")
+        self.ax_xscale = tk.StringVar(value="auto")
+        self.ax_yscale = tk.StringVar(value="auto")
 
         panes = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
         panes.pack(fill=tk.BOTH, expand=True)
@@ -337,6 +345,7 @@ class App:
         self.ch_vals = {k: float(vals[k]) for k in vals
                         if k not in DIODE_FIELDS}
         self.ch_min, self.ch_max = self._default_bounds(self.ch_vals, BOUNDS)
+        self._sync_ktheta_min()
         self.ch_fitted = False
         # show EVERY model parameter (dataclass order); the preset only
         # decides which are free -- unused ones stay visible, locked
@@ -362,6 +371,29 @@ class App:
         hi = {k: float(table.get(k, (-math.inf, math.inf))[1])
               for k in keys}
         return lo, hi
+
+    def _sync_ktheta_min(self):
+        """k_theta's safe lower bound depends on the knee form:
+        - mobility form (k_kneeform = 0): the knee-divisor zero -1/v_ovmax
+          (a negative k_theta widens the knee; below this 1 + k_theta*v_ov_eff2
+          <= 0 at the max overdrive and v_knee blows up). DYNAMIC in v_ovmax.
+          With the charge cap off (v_ovmax = 0) the bound is unbounded, so keep
+          the static guard.
+        - linear knee-scale form (k_kneeform = 1): v_knee = k_theta*v_ov_eff2,
+          so k_theta is a non-negative multiplier -> lower bound 0 (negative
+          would floor the knee at v_kneemin, i.e. switch the knee off)."""
+        if "k_theta" not in self.ch_min:
+            return
+        if self.ch_vals.get("k_kneeform", 0.0) >= 0.5:
+            self.ch_min["k_theta"] = 0.0
+        else:
+            vom = self.ch_vals.get("v_ovmax", 0.0)
+            if vom > 0.0:
+                self.ch_min["k_theta"] = -1.0 / vom
+        for row in self.ch_tree.get_children():
+            if self.ch_tree.item(row, "values")[0] == "k_theta":
+                self.ch_tree.set(row, "min", displayNum(self.ch_min["k_theta"]))
+                break
 
     def _fill_tree(self, tree, keys, values, free, lo, hi):
         tree.delete(*tree.get_children())
@@ -423,6 +455,10 @@ class App:
                 return
             vals[key] = val
             tree.set(row, col, displayNum(val))
+            # editing v_ovmax or the knee-form selector moves k_theta's dynamic
+            # lower bound (-1/v_ovmax for the mobility form, 0 for the scale form)
+            if key in ("v_ovmax", "k_kneeform") and "k_theta" in colmaps[2]:
+                self._sync_ktheta_min()
 
         ent.bind("<Return>", commit)
         ent.bind("<FocusOut>", commit)
@@ -456,6 +492,19 @@ class App:
         vth = next((t for t in self.tables if isinstance(t, VthSpec)), None)
         return rds, vth
 
+    def _tc_rds(self):
+        """The Rds(on) table that spans the MOST temperatures -- the TC data.
+        The TC fit and the TC plot must use the SAME table. The first-parsed
+        RdsSpec is often the 25 C-only chord file, which cannot constrain the
+        drain-resistance temperature coefficients (a_rd, b_rd) at all: at
+        T = ref every row has dT = 0, so r_d(T) = r_d25 regardless of a_rd/
+        b_rd and they drift to their bounds (session 32: TC RMSE read 2.1 %
+        while the high-T Rds(on) curves were garbage)."""
+        cands = [t for t in self.tables if isinstance(t, RdsSpec)]
+        if not cands:
+            return None
+        return max(cands, key=lambda t: len(set(t.tj.tolist())))
+
     def _fit_channel(self):
         iv = self._iv()
         if iv is None:
@@ -481,6 +530,7 @@ class App:
             res = fit_channel_ref(
                 iv, rds, p, ref_temp=float(self.ref_temp.get()),
                 free_override=free, bounds_override=bounds,
+                start_override=dict(self.ch_vals),
                 progress=lambda m: self.q.put(("progress",
                                                "channel@ref " + m)))
             return ("ch", res)
@@ -507,10 +557,20 @@ class App:
         self._run(work)
 
     def _fit_tc(self):
-        rds, vth = self._specs()
+        rds = self._tc_rds()
+        vth = next((t for t in self.tables if isinstance(t, VthSpec)), None)
         if rds is None and vth is None:
             messagebox.showerror("No specs", "Parse an RDS or VTH CSV.")
             return
+        if rds is not None and len(set(rds.tj.tolist())) < 2:
+            messagebox.showwarning(
+                "Rds(on) is single-temperature",
+                "The Rds(on) data spans only one temperature, so the drain-"
+                "resistance temperature coefficients (a_rd, b_rd) cannot be "
+                "identified from it -- they will sit at their bounds and the "
+                "high-temperature Rds(on) curves will be unreliable. Parse a "
+                "multi-temperature Rds(on) CSV (Rds(on) vs V_gs at several "
+                "T_j) for a meaningful TC fit.")
         p = PRESETS[self.preset_name.get()]
 
         def work():
@@ -576,11 +636,87 @@ class App:
         self.btn_save = ttk.Button(row2, text="Save subckt",
                                    command=self._save)
         self.btn_save.pack(side=tk.LEFT, padx=4)
+        # axis range + scale controls (session 31): blank = autoscale,
+        # scale "auto" = keep the plot's own default. Engineering suffixes
+        # accepted in the range boxes. Applies to the current plot.
+        row3 = ttk.Frame(f)
+        row3.pack(fill=tk.X, padx=4, pady=(4, 0))
+        for lbl, var in (("x0", self.ax_xmin), ("x1", self.ax_xmax)):
+            ttk.Label(row3, text=lbl).pack(side=tk.LEFT)
+            ttk.Entry(row3, textvariable=var, width=7).pack(side=tk.LEFT,
+                                                            padx=(1, 4))
+        ttk.Combobox(row3, textvariable=self.ax_xscale, width=6,
+                     values=("auto", "linear", "log"),
+                     state="readonly").pack(side=tk.LEFT, padx=4)
+        for lbl, var in (("y0", self.ax_ymin), ("y1", self.ax_ymax)):
+            ttk.Label(row3, text=lbl).pack(side=tk.LEFT)
+            ttk.Entry(row3, textvariable=var, width=7).pack(side=tk.LEFT,
+                                                            padx=(1, 4))
+        ttk.Combobox(row3, textvariable=self.ax_yscale, width=6,
+                     values=("auto", "linear", "log"),
+                     state="readonly").pack(side=tk.LEFT, padx=4)
+        ttk.Button(row3, text="Apply axes",
+                   command=self._reapply_axes).pack(side=tk.LEFT, padx=4)
         self.fig = Figure(figsize=(5, 4), dpi=90)
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         self.canvas = FigureCanvasTkAgg(self.fig, master=f)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True,
                                          padx=4, pady=4)
+
+    def _apply_axes(self):
+        """Apply the axis range/scale controls to every axis on the figure.
+        An empty range entry autoscales that side; a filled entry pins it.
+        Scale "auto" = keep the plot's own default (caps default to log-y).
+        Engineering suffixes accepted in the boxes."""
+        def lim(var):
+            t = var.get().strip()
+            if not t:
+                return None
+            try:
+                return parseEng(t)
+            except Exception:
+                return None
+        xs, ys = self.ax_xscale.get(), self.ax_yscale.get()
+
+        def auto(a, axis):
+            # re-enable autoscale (a prior manual set_xlim disabled it),
+            # recompute the data limits, then apply -- so an empty box
+            # restores autoscale instead of leaving the old range stuck.
+            a.autoscale(enable=True, axis=axis)
+            a.relim()
+            a.autoscale_view(scalex=(axis == "x"), scaley=(axis == "y"))
+
+        for ax in self.fig.axes:
+            if xs == "log":
+                ax.set_xscale("log")
+            elif xs == "linear":
+                ax.set_xscale("linear")
+            if ys == "log":
+                ax.set_yscale("log")
+            elif ys == "linear":
+                ax.set_yscale("linear")
+            xl, xh = lim(self.ax_xmin), lim(self.ax_xmax)
+            yl, yh = lim(self.ax_ymin), lim(self.ax_ymax)
+            if xs == "log":
+                xl = None if (xl is not None and xl <= 0) else xl
+                xh = None if (xh is not None and xh <= 0) else xh
+            if ys == "log":
+                yl = None if (yl is not None and yl <= 0) else yl
+                yh = None if (yh is not None and yh <= 0) else yh
+            # autoscale each axis, then pin only the sides the user filled in
+            auto(ax, "x")
+            xlo, xhi = ax.get_xlim()
+            ax.set_xlim(xl if xl is not None else xlo,
+                        xh if xh is not None else xhi)
+            auto(ax, "y")
+            ylo, yhi = ax.get_ylim()
+            ax.set_ylim(yl if yl is not None else ylo,
+                        yh if yh is not None else yhi)
+
+    def _reapply_axes(self):
+        if self.fig.axes:
+            self._apply_axes()
+            self.canvas.draw()
 
     def _plot_iv(self):
         iv = self._iv()
@@ -598,6 +734,7 @@ class App:
         ax.set_xlabel("v_DS [V]")
         ax.set_ylabel("i_D [A]")
         ax.legend(fontsize=7)
+        self._apply_axes()
         self.canvas.draw()
 
     def _plot_caps(self):
@@ -642,6 +779,7 @@ class App:
         ax.set_xlabel("V_DS [V]")
         ax.set_ylabel("C [pF]")
         ax.legend(fontsize=7)
+        self._apply_axes()
         self.canvas.draw()
 
     def _plot_diode(self):
@@ -671,12 +809,19 @@ class App:
         ax.set_xlabel("v_SD forward [V]")
         ax.set_ylabel("i_SD forward [A]")
         ax.legend(fontsize=7)
+        self._apply_axes()
         self.canvas.draw()
 
     def _plot_tc(self):
-        """Measured Rds(on)/Vth vs temperature and the TC law applied to
-        the channel parameters currently in the tree."""
-        rds, vth = self._specs()
+        """Measured Rds(on)/Vth against the datasheet table's own x column,
+        with the TC law applied to the channel parameters currently in the
+        tree. The Rds(on) panel uses the Rds(on) table that SPANS
+        temperatures (the TC data), not the 25 C chord file, and plots
+        against that CSV's first data column (V_gs for an Rds(on)-vs-V_gs
+        table), one series per temperature. The Vth panel separates the two
+        test currents instead of mixing them."""
+        rds = self._tc_rds()
+        vth = next((t for t in self.tables if isinstance(t, VthSpec)), None)
         if rds is None and vth is None:
             messagebox.showerror("No specs", "Parse an RDS or VTH CSV.")
             return
@@ -692,40 +837,74 @@ class App:
                 messagebox.showerror("Test current", str(exc))
                 return
             ax1 = self.fig.add_subplot(nup, 1, 1)
-            for vg in sorted(set(rds.vgs.tolist())):
-                m = rds.vgs == vg
-                ax1.plot(rds.tj[m], rds.rds[m] * 1e3, ".",
-                         label=f"meas {vg:g} V")
-                Ts = np.linspace(float(rds.tj.min()),
-                                 float(rds.tj.max()), 40)
-                it = float(itest[m][0])
+            xkind = rds.x_kind
+            if xkind == "vgs":
+                xarr, xlab = rds.vgs, "V_gs [V]"
+                sarr, sfmt = rds.tj, "T_j {v:g} C"
+            elif xkind == "ids":
+                xarr, xlab = rds.i_test, "I_test [A]"
+                sarr, sfmt = rds.vgs, "V_gs {v:g} V"
+            else:  # tj, or unrecognised -> legacy T_j axis
+                xarr, xlab = rds.tj, "T_j [C]"
+                sarr, sfmt = rds.vgs, "V_gs {v:g} V"
+            y = rds.rds * 1e3
+
+            def model1(s, xv):
+                if xkind == "vgs":            # s = temperature, vary v_gs
+                    it = float(itest[sarr == s][0])
+                    return model_ron(p25, float(s), float(xv), it, tcd) * 1e3
+                if xkind == "ids":            # s = v_gs, vary test current
+                    T = float(rds.tj[sarr == s][0])
+                    return model_ron(p25, T, float(s), float(xv), tcd) * 1e3
+                it = float(itest[sarr == s][0])   # s = v_gs, vary T_j
+                return model_ron(p25, float(xv), float(s), it, tcd) * 1e3
+
+            for s in sorted(set(sarr.tolist())):
+                m = sarr == s
+                ax1.plot(xarr[m], y[m], ".",
+                         label=f"meas {sfmt.format(v=s)}")
+                xg = np.linspace(float(xarr[m].min()),
+                                 float(xarr[m].max()), 40)
                 ys = []
-                for T in Ts:
+                for xv in xg:
                     try:
-                        ys.append(model_ron(p25, float(T), float(vg), it,
-                                            tcd) * 1e3)
+                        ys.append(model1(s, xv))
                     except ValueError:
                         ys.append(np.nan)
-                ax1.plot(Ts, ys, "-", label=f"model {vg:g} V")
-            ax1.set_xlabel("T_j [C]")
+                ax1.plot(xg, ys, "-", label=f"model {sfmt.format(v=s)}")
+            ax1.set_xlabel(xlab)
             ax1.set_ylabel("Rds(on) [mOhm]")
             ax1.legend(fontsize=6)
         if vth is not None:
             ax2 = self.fig.add_subplot(nup, 1, nup)
-            ax2.plot(vth.tj, vth.vth, ".", label="meas")
-            Ts = np.linspace(float(vth.tj.min()), float(vth.tj.max()), 40)
-            it = float(vth.i_test[0])
-            ys = []
-            for T in Ts:
-                try:
-                    ys.append(model_vth(p25, float(T), it, tcd))
-                except ValueError:
-                    ys.append(np.nan)
-            ax2.plot(Ts, ys, "-", label="model")
-            ax2.set_xlabel("T_j [C]")
+            xkind = vth.x_kind
+            if xkind == "ids":            # Vth CSV leads with I_d
+                xarr, xlab = vth.i_test, "I_test [A]"
+                sarr, sfmt = vth.tj, "T_j {v:g} C"
+            else:                         # T_j (the datasheet layout)
+                xarr, xlab = vth.tj, "T_j [C]"
+                sarr, sfmt = vth.i_test, "I_test {v:g} A"
+            for s in sorted(set(sarr.tolist())):
+                m = sarr == s
+                ax2.plot(xarr[m], vth.vth[m], ".",
+                         label=f"meas {sfmt.format(v=s)}")
+                xg = np.linspace(float(xarr[m].min()),
+                                 float(xarr[m].max()), 40)
+                ys = []
+                for xv in xg:
+                    try:
+                        if xkind == "ids":
+                            ys.append(model_vth(p25, float(s), float(xv), tcd))
+                        else:
+                            ys.append(model_vth(p25, float(xv), float(s), tcd))
+                    except ValueError:
+                        ys.append(np.nan)
+                ax2.plot(xg, ys, "-", label=f"model {sfmt.format(v=s)}")
+            ax2.set_xlabel(xlab)
             ax2.set_ylabel("Vth [V]")
             ax2.legend(fontsize=7)
         self.fig.tight_layout()
+        self._apply_axes()
         self.canvas.draw()
 
     def _extract_recov(self):

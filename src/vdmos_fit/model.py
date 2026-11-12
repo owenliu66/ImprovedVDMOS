@@ -5,14 +5,20 @@
           + g_k*v_ds*k_kink*k_db
 
     k_db     = tanh(v_ds/v_dbsat)                 drain-bias factor: 0 ohmic, ~1 above knee
-    v_th     = v_th0 - k_eta*v_ds*k_db            DIBL (bounded by the same factor)
+    v_th     = v_th0 - soft_cap(k_eta*v_ds*k_db, v_diblmax, k_diblsharp)
+                                                 DIBL: shift bounded by k_db, then soft-capped
+                                                 at v_diblmax (v_diblmax = 0 -> no cap)
     v_ov     = v_sub*ln(1 + exp((v_gs - v_th)/v_sub))  smooth subthreshold -> strong inversion
     v_ov_eff = v_ov/(1 + (v_ov/v_ovmax)**k_ovsharp)**(1/k_ovsharp)
                                                 soft charge cap (v_ovmax = 0 -> off)
     v_ov_eff2 = v_ov_eff*(1 + k_beta_trap*v_ov_eff)
                                                 interface-trap-filling gain (k_beta_trap = 0 -> off)
                                                 THE effective overdrive downstream
-    v_knee   = v_ov_eff2/(1 + k_theta*v_ov_eff2)  knee voltage (field-dependent mobility)
+    v_knee   = v_ov_eff2/(1 + k_theta*v_ov_eff2)  knee voltage (k_kneeform = 0, default:
+                                                 field-dependent mobility, gate exponent
+                                                 alpha in (1,2])
+             = k_theta*v_ov_eff2                  knee voltage (k_kneeform = 1: linear
+                                                 knee scale, alpha pinned at 2)
     v_dseff  = v_knee*tanh(v_ds/v_knee)           soft drain variable (k_kneesharp = 0, legacy)
              = v_ds/(1 + (v_ds/v_knee)**k_kneesharp)**(1/k_kneesharp)   power-law soft-min
 
@@ -70,6 +76,11 @@ from .diode import _solve_diode_series_r, vdmos_diode
 from .params import DEFAULT, Params
 
 __all__ = ["vdmos_id", "vdmos_id_level1", "vdmos_diode"]
+
+# Numerical backstop on the knee divisor 1 + k_theta*v_ov_eff2 (see
+# _channel_current): only engages for negative k_theta pushed past the
+# knee-divisor zero at -1/v_ovmax; never for k_theta >= 0.
+_KNEE_DENOM_FLOOR = 1e-9
 
 
 def vdmos_id(v_ds, v_gs, p: Params = DEFAULT, *, t_c: float = 25.0) -> np.ndarray:
@@ -207,8 +218,18 @@ def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:
     # Common drain-bias factor: 0 in the ohmic region, ~1 well above the knee.
     k_db = np.tanh(v_ds / p.v_dbsat)
 
-    # 1) DIBL-shifted threshold (bounded by the same factor).
-    v_th = p.v_th0 - p.k_eta * v_ds * k_db
+    # 1) DIBL-shifted threshold (bounded by the same factor), with an optional
+    #    tunable soft cap on the SHIFT itself (v_diblmax = 0 -> identity, the
+    #    pre-cap model bit for bit). The raw shift k_eta*v_ds*k_db grows without
+    #    bound in v_ds, so a fit anchored on low-voltage data extrapolates an
+    #    aggressive linear DIBL that can drive v_th negative at high v_ds (the
+    #    ISC040 100 V failure mode). The soft cap -- the SAME power-law soft-min
+    #    as the gate-charge cap -- ceilings the shift at v_diblmax, so
+    #    v_th >= v_th0 - v_diblmax for every v_ds. Monotone in v_ds (soft-min
+    #    derivative 0 <= dshift/draw <= 1), so v_th stays non-increasing and the
+    #    package-R bracket proof (non-negative partials) is untouched.
+    dibl = _soft_cap(p.k_eta * v_ds * k_db, p.v_diblmax, p.k_diblsharp)
+    v_th = p.v_th0 - dibl
 
     # 2) Smooth overdrive, overflow-safe softplus.
     z = np.clip((v_gs - v_th) / p.v_sub, -700.0, 700.0)
@@ -225,9 +246,29 @@ def _channel_current(v_ds, v_gs, p: Params) -> np.ndarray:
     # argument the cap section makes for applying the cap before v_knee.
     v_ov_eff2 = v_ov_eff * (1.0 + p.k_beta_trap * v_ov_eff)
 
-    # 3) Knee voltage from vertical-field mobility degradation, built from the
-    # gained overdrive (charge and knee saturate together; see README).
-    v_knee = np.maximum(v_ov_eff2 / (1.0 + p.k_theta * v_ov_eff2), p.v_kneemin)
+    # 3) Knee voltage from the gained overdrive (charge and knee saturate
+    #    together; see README). Two forms, selected by k_kneeform:
+    #
+    #    k_kneeform = 0 (DEFAULT, mobility-degradation form):
+    #        v_knee = v_ov_eff2 / (1 + k_theta*v_ov_eff2)
+    #      k_theta [1/V] is the gate-exponent knob: alpha = d ln i_d,sat /
+    #      d ln v_ov_eff2 = 1 + 1/(1 + k_theta*v_ov_eff2) in (1, 2] (v_vsat off).
+    #      Identity at k_theta = 0. May go negative (wider knee) down to the
+    #      knee-divisor zero -1/v_ovmax; the divisor is floored as a numerical
+    #      backstop (bit-identical for k_theta >= 0).
+    #
+    #    k_kneeform = 1 (linear knee-scale form):
+    #        v_knee = k_theta * v_ov_eff2
+    #      k_theta is a dimensionless knee MULTIPLIER (identity 1.0), directly
+    #      scaling the knee voltage. No divisor -> no singularity, no floor, no
+    #      negative-k_theta hazard. But the knee grows LINEARLY with overdrive,
+    #      so i_d,sat = 0.5*k_p*k_theta*v_ov_eff2^2 and alpha is pinned at 2
+    #      (square-law) -- all sub-2 flattening must come from v_vsat.
+    if p.k_kneeform >= 0.5:
+        v_knee = np.maximum(p.k_theta * v_ov_eff2, p.v_kneemin)
+    else:
+        denom = np.maximum(1.0 + p.k_theta * v_ov_eff2, _KNEE_DENOM_FLOOR)
+        v_knee = np.maximum(v_ov_eff2 / denom, p.v_kneemin)
 
     # 4) Soft drain variable: v_dseff -> v_ds for v_ds << v_knee, -> v_knee for
     #    v_ds >> v_knee. k_kneesharp = 0 (default) keeps the legacy tanh

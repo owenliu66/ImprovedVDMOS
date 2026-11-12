@@ -177,3 +177,23 @@ def test_fit_channel_kelvin_ratio_constraint():
     res = fit_channel_ref(iv, rd, PRESETS["sic"], free_override=free,
                           multistart_limit=1, max_nfev=3000)
     assert 0.0 <= res.params.r_sk <= res.params.r_s
+
+
+def test_start_override_carries_nonpreset_knob():
+    """Regression (GUI field report): the channel fit must honour the live
+    values as the first start, so a knob the preset never knew about --
+    k_kneeform -- survives the fit instead of reverting to the Params()
+    default (which silently dropped the GUI's scale-form selection and pinned
+    k_theta at 0). Without start_override the official preset default is used."""
+    iv = load_table(DATA / "ISC040N10NM8_IV_25C.csv")
+    rd = load_table(DATA / "ISC040N10NM8_Rdson_Vgs.csv")
+    p = PRESETS["trench"]
+    so = {**p.channel_fixed, **p.channel_start, "k_kneeform": 1.0,
+          "k_theta": 1.0, "v_vsat": 5.0}
+    free = tuple(p.channel_free25) + ("k_theta", "v_vsat")
+    res = fit_channel_ref(iv, rd, p, free_override=free, start_override=so,
+                          multistart_limit=1, max_nfev=1500)
+    assert res.params.k_kneeform == 1.0        # survived, not reset to 0
+    res0 = fit_channel_ref(iv, rd, p, free_override=free,
+                           multistart_limit=1, max_nfev=1500)
+    assert res0.params.k_kneeform == 0.0       # preset default (mobility form)

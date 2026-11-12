@@ -224,3 +224,96 @@ def test_round_trip_recovers_kneesharp():
     assert res.success
     assert res.rmse_rel < 0.02
     assert res.params.k_kneesharp == pytest.approx(4.0, rel=0.20)
+
+
+# ------------------------------------------------------- negative k_theta (wider knee)
+def test_negative_ktheta_widens_knee_and_stays_finite():
+    """A negative k_theta makes v_knee = v_ov_eff2/(1 + k_theta*v_ov_eff2) exceed
+    v_ov_eff2 -- a WIDER knee than the k_theta >= 0 regime can give (the ISC040
+    low-voltage fit wants this). Checked with a charge cap so v_ov_eff2 is bounded
+    by v_ovmax: at the safe bound k_theta = -1/v_ovmax the divisor stays positive
+    (v_ov_eff2 < v_ovmax strictly) so the model is finite; pushed past it the
+    divisor would go negative but the model floor (_KNEE_DENOM_FLOOR) keeps
+    everything finite -- the numerical backstop."""
+    base = Params(k_p=200.0, v_th0=4.0, v_sub=0.24, v_ovmax=8.0, k_ovsharp=3.0,
+                  k_theta=0.0, v_vsat=8.0, k_kneesharp=1.6, k_eta=0.0,
+                  k_lambda=0.0, g_k=0.0, v_dbsat=0.5, r_d=0.0, r_s=0.0)
+    v_ds = np.linspace(0.0, 30.0, 61)
+    v_gs = 12.0
+
+    i_pos = np.asarray(vdmos_id(v_ds, v_gs, base))
+    i_neg = np.asarray(vdmos_id(v_ds, v_gs, base.replace(k_theta=-0.05)))
+    # wider knee (larger v_knee) -> higher current at a given v_ds below the knee
+    assert np.all(i_neg[1:] >= i_pos[1:] - 1e-9)
+    assert np.any(i_neg > i_pos + 1e-6)
+
+    # exactly at the safe bound -1/v_ovmax: divisor still > 0 (cap is an
+    # asymptote), model finite
+    i_bound = np.asarray(vdmos_id(v_ds, v_gs, base.replace(k_theta=-1.0 / 8.0)))
+    assert np.all(np.isfinite(i_bound))
+    # pushed PAST the bound: the floor keeps it finite (no inf/NaN)
+    i_past = np.asarray(vdmos_id(v_ds, v_gs, base.replace(k_theta=-1.0)))
+    assert np.all(np.isfinite(i_past))
+
+
+def test_ktheta_is_linear_space_with_negative_bound():
+    """k_theta moved OUT of log space (it can be negative), so a negative search
+    bound must not produce log(negative) = NaN in the packing path."""
+    from vdmos_fit.params import BOUNDS, LOG_PARAMS, pack, vector_bounds
+
+    assert "k_theta" not in LOG_PARAMS
+    assert BOUNDS["k_theta"][0] < 0.0
+    assert pack(Params(k_theta=-0.1), ("k_theta",))[0] == pytest.approx(-0.1)
+    lo, _hi = vector_bounds(("k_theta",))
+    assert np.isfinite(lo[0]) and lo[0] == pytest.approx(BOUNDS["k_theta"][0])
+
+
+# ------------------------------------------------------- linear knee-scale form
+def test_kneeform_selector_zero_is_bit_identical():
+    """k_kneeform = 0 (default) selects the mobility form and is bit-identical to
+    Params() -- the whole catalog and every anchor ride this default."""
+    assert Params(k_kneeform=0.0) == Params()
+    v_ds = np.linspace(0.0, 60.0, 121)
+    v_gs = np.linspace(-2.0, 16.0, 91)
+    vd2, vg2 = np.meshgrid(v_ds, v_gs)
+    assert np.array_equal(vdmos_id(vd2, vg2, DEFAULT),
+                          vdmos_id(vd2, vg2, DEFAULT.replace(k_kneeform=0.0)))
+
+
+def test_kneeform_scale_pins_alpha_at_two():
+    """k_kneeform = 1: v_knee = k_theta*v_ov_eff2, so with v_vsat off the
+    saturated current is i_d,sat = 0.5*k_p*k_theta*v_ov_eff2^2 -- the gate
+    exponent is exactly 2 (square-law), independent of k_theta. Checked directly
+    against that closed form (cap off, k_eta = k_lambda = g_k = 0 so v_ov_eff2 =
+    v_ov = v_sub*softplus((v_gs - v_th0)/v_sub))."""
+    p = Params(k_p=200.0, v_th0=4.0, v_sub=0.06, v_ovmax=0.0, k_theta=1.7,
+               k_kneeform=1.0, v_vsat=1e9, k_kneesharp=0.0, k_eta=0.0,
+               k_lambda=0.0, g_k=0.0, v_dbsat=0.5, r_d=0.0, r_s=0.0)
+
+    def v_ov(vg):
+        z = np.clip((vg - p.v_th0) / p.v_sub, -700, 700)
+        return p.v_sub * np.log1p(np.exp(z))
+
+    for vg in (8.0, 12.0, 16.0):
+        i_sat = float(vdmos_id(1e5, vg, p))           # deep saturation, v_vsat off
+        closed = 0.5 * p.k_p * p.k_theta * v_ov(vg) ** 2
+        assert i_sat == pytest.approx(closed, rel=1e-6)
+
+
+def test_kneeform_scale_negative_ktheta_floors_knee_and_stays_finite():
+    """k_kneeform = 1 with k_theta < 0 makes v_knee = k_theta*v_ov_eff2 negative,
+    which the v_kneemin floor clamps -- the knee switches off, but the model
+    stays finite (no divisor, so no singularity anywhere, unlike the mobility
+    form)."""
+    base = Params(k_p=200.0, v_th0=4.0, v_sub=0.24, v_ovmax=8.0, k_ovsharp=3.0,
+                  k_theta=-0.5, k_kneeform=1.0, v_vsat=8.0, k_kneesharp=1.6,
+                  k_eta=0.0, k_lambda=0.0, g_k=0.0, v_dbsat=0.5)
+    v_ds = np.linspace(0.0, 30.0, 61)
+    out = np.asarray(vdmos_id(v_ds, 12.0, base))
+    assert np.all(np.isfinite(out))
+    # the aggressive mobility-form params that needed the divisor floor are also
+    # perfectly finite in the scale form (no floor is ever needed)
+    v_ds2 = np.linspace(0.0, 200.0, 401)
+    p2 = base.replace(k_theta=-0.2751, k_eta=42.55, v_diblmax=6.965,
+                      k_diblsharp=0.1479, k_lambda=9.768e-3, v_dbsat=0.3258)
+    assert np.all(np.isfinite(np.asarray(vdmos_id(v_ds2, 15.0, p2))))

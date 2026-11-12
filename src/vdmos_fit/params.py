@@ -73,7 +73,22 @@ class Params:
                    v_ovmax*(1 + k_beta_trap*v_ovmax), NOT v_ovmax -- expect
                    k_beta_trap <-> v_ovmax anti-correlation if both are free.
     k_theta : float  Mobility-degradation coefficient [1/V] ->
-                   v_knee = v_ov_eff2/(1 + k_theta*v_ov_eff2).
+                   v_knee = v_ov_eff2/(1 + k_theta*v_ov_eff2). May be NEGATIVE:
+                   a negative k_theta WIDENS the knee (v_knee > v_ov_eff2),
+                   which the ISC040 low-voltage fit wants. Safe lower limit is
+                   the knee-divisor zero -1/v_ovmax (v_ov_eff2 < v_ovmax keeps
+                   the divisor positive inside it); model.py floors the divisor
+                   as a backstop. Linear space (not logged) for this reason.
+                   NOTE: k_theta's meaning depends on k_kneeform (below).
+    k_kneeform : float  Knee-position form selector [-]. 0 (default) = the
+                   mobility-degradation form v_knee = v_ov_eff2/(1 + k_theta*v_ov_eff2)
+                   with k_theta [1/V] the gate-exponent knob (alpha in (1,2],
+                   identity at k_theta = 0). 1 = the linear knee-scale form
+                   v_knee = k_theta*v_ov_eff2 with k_theta a dimensionless knee
+                   MULTIPLIER (identity 1.0, no divisor/singularity), but then
+                   alpha is pinned at 2 (square-law) and all flattening comes
+                   from v_vsat. Selector only: 0 or 1, never fitted (kept out of
+                   the free set); linear space (0 is a legitimate value).
     v_vsat : float   Velocity-saturation knee [V]; sets i_d,sat ~ v_ov**alpha,
                    alpha < 2. (The doubled v_ is deliberate: v_sat alone would
                    read as the drain-saturation voltage, which is v_knee.)
@@ -89,6 +104,19 @@ class Params:
                    freeing it changes the knee shape, so it stays out of
                    DEFAULT_FREE like v_ovmax/k_ovsharp.
     k_eta : float    DIBL coefficient [1/V].
+    v_diblmax : float  Soft cap (asymptotic ceiling) on the DIBL threshold
+                    SHIFT k_eta*v_ds*k_db [V]; 0 = off (identity, the pre-cap
+                    model bit for bit). The raw shift grows without bound in
+                    v_ds, so a fit anchored on low-voltage data extrapolates an
+                    aggressive linear DIBL that can drive v_th negative at high
+                    v_ds (the ISC040 100 V failure mode); the cap keeps
+                    v_th >= v_th0 - v_diblmax. Same power-law soft-min as
+                    v_ovmax, same "off = leave it out of the free set" doctrine
+                    (driving v_diblmax -> 0+ is a hard clip at zero shift, the
+                    opposite of off).
+    k_diblsharp : float  Sharpness of the DIBL-shift cap [-]; >> 1 approaches a
+                    hard clip at v_diblmax. Only meaningful when v_diblmax > 0.
+                    Same role as k_ovsharp for the charge cap.
     k_lambda : float Channel/drift-length modulation [1/V]. (spelled out --
                    ``lambda`` is a Python keyword.)
     g_k : float      Trench kink (parasitic accumulation channel) conductance
@@ -180,9 +208,12 @@ class Params:
     k_ovsharp: float = 1.0
     k_beta_trap: float = 0.0
     k_theta: float = 0.015
+    k_kneeform: float = 0.0
     v_vsat: float = 1.5
     k_kneesharp: float = 0.0
     k_eta: float = 0.02
+    v_diblmax: float = 0.0
+    k_diblsharp: float = 1.0
     k_lambda: float = 0.02
     g_k: float = 0.4
     v_thk: float = 1.6
@@ -219,17 +250,23 @@ PARAM_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Params))
 
 # Parameters fitted in log space (strictly positive, span decades).
 # v_ovmax is NOT here: 0 is a legitimate value ("cap off") and cannot be logged.
-# k_kneesharp likewise: 0 is the legitimate "legacy tanh" value. k_beta_trap
+# v_diblmax likewise: 0 is the legitimate "DIBL cap off" identity (same doctrine
+# as v_ovmax). k_kneesharp likewise: 0 is the legitimate "legacy tanh" value. k_beta_trap
 # likewise: 0 is the legitimate "gain off" identity (and negative values are
 # rejected outright by model.py, so the parameter is not strictly positive).
+# k_theta likewise: it may be NEGATIVE (a negative k_theta WIDENS the knee,
+# v_knee > v_ov_eff2 -- the ISC040 low-voltage fit wants a wider knee than
+# k_theta >= 0 allows), so it is not strictly positive and cannot be logged.
+# Its search lower bound is the knee-divisor zero -1/v_ovmax (see BOUNDS); the
+# model floors the divisor as a numerical backstop (model._KNEE_DENOM_FLOOR).
 # Diode saturation currents are in LOG_PARAMS even though 0 is the off
 # sentinel: "off" is reached by leaving them out of the free set (same
 # doctrine as v_ovmax/k_kneesharp), and a FREE i_s must never wander near 0
 # -- its lower bound (1e-22) is far from the sentinel's neighbourhood.
 LOG_PARAMS: frozenset[str] = frozenset(
     {
-        "k_p", "v_sub", "k_theta", "v_vsat", "k_eta", "k_lambda",
-        "g_k", "v_kovsoft", "v_dbsat", "k_ovsharp",
+        "k_p", "v_sub", "v_vsat", "k_eta", "k_lambda",
+        "g_k", "v_kovsoft", "v_dbsat", "k_ovsharp", "k_diblsharp",
         "i_s", "k_n", "i_sr", "k_nr", "i_kf", "k_xti", "v_eg",
     }
 )
@@ -253,7 +290,18 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # bound 2.0 is a search guard -- the measured physical scale is ~0.06 1/V
     # (IMCQ120R004M2H, 25/175 degC).
     "k_beta_trap": (0.0, 2.0),
-    "k_theta": (1e-4, 5.0),
+    # Linear space (k_theta may be negative). The PHYSICALLY safe lower bound is
+    # the knee-divisor zero -1/v_ovmax (below it, 1 + k_theta*v_ov_eff2 <= 0 at
+    # the maximum overdrive and v_knee blows up / flips sign). That bound is
+    # dynamic (depends on the free v_ovmax), so the static table carries a
+    # permissive -1.0 guard; the GUI and any fit that frees k_theta should tighten
+    # the lower bound to -1/v_ovmax, and model.py floors the divisor as a
+    # numerical backstop. Upper bound 5.0 unchanged.
+    "k_theta": (-1.0, 5.0),
+    # Knee-form selector: 0 = mobility form (default), 1 = linear knee-scale
+    # form. Never fitted (kept out of the free set); a discrete switch, so the
+    # box is just [0, 1] and it is linear space (0 is a legitimate value).
+    "k_kneeform": (0.0, 1.0),
     "v_vsat": (0.05, 10000.0),
     # Linear space; lower bound above 0 for the same reason as v_ovmax -- a
     # free k_kneesharp must never enter the region near the sentinel 0 ("legacy
@@ -263,6 +311,13 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # knee softer than the old floor allowed.
     "k_kneesharp": (0.1, 40.0),
     "k_eta": (1e-5, 1.0),
+    # Linear space; lower bound deliberately well above 0 (a free v_diblmax must
+    # never enter the "hard clip at ~0 shift" region, which is the opposite of
+    # off -- same v_ovmax doctrine). Upper bound 20 V is a loose search guard:
+    # any real threshold shift is a few volts, so a cap this high never binds and
+    # the fit collapses to the uncapped model.
+    "v_diblmax": (0.05, 20.0),
+    "k_diblsharp": (0.5, 40.0),
     "k_lambda": (1e-12, 1.0),
     "g_k": (1e-12, 100.0),
     "v_thk": (-5.0, 10.0),

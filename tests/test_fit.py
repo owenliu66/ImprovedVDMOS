@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from vdmos_fit import (
+    BOUNDS,
     DEFAULT,
     CurveSet,
     FitResult,
@@ -63,10 +64,14 @@ def test_fit_improves_on_default_start(synthetic):
 
 
 def test_bounds_are_respected(synthetic):
-    """A deliberately absurd start must still land inside physical bounds."""
+    """A deliberately absurd start must still land inside physical bounds.
+    k_theta is now SIGNED (linear space, may be negative -> wider knee), so the
+    check is 'inside the box', not 'positive' like the strictly-positive params."""
     bad = DEFAULT.replace(k_p=1e-4, k_theta=1e-4, v_vsat=1e-3)
     res = fit(synthetic, start=bad)
-    assert res.params.k_p > 0 and res.params.v_vsat > 0 and res.params.k_theta > 0
+    lo, hi = BOUNDS["k_theta"]
+    assert res.params.k_p > 0 and res.params.v_vsat > 0
+    assert lo <= res.params.k_theta <= hi
 
 
 def test_fixed_parameters_stay_fixed(synthetic):
@@ -128,15 +133,18 @@ def test_theta_vsat_correlation_is_reported(synthetic):
     Evaluated with the classic 9-parameter free set: once r_d/r_s join the fit,
     the knee-flattening trade-off redistributes across more parameters and the
     single k_theta<->v_vsat pair drops below the 0.8 reporting threshold (their
-    individual sigmas stay order-unity or worse -- see
+    individual sigmas stay large -- see
     tests/test_package_r.py::test_fit_recovers_package_resistance).
     """
     legacy_free = ("k_p", "v_th0", "k_theta", "v_vsat", "k_eta", "k_lambda", "g_k", "v_thk")
     ident = identifiability(fit(synthetic, free=legacy_free), legacy_free)
     pairs = {(a, b) for a, b, _ in ident.worst_pairs}
     assert ("k_theta", "v_vsat") in pairs
-    # and both carry large individual error bars as a consequence
-    assert ident.sigma_rel["k_theta"] > 1.0
+    # and both carry large individual error bars as a consequence. k_theta is
+    # fitted in LINEAR space (it may be negative), so its sigma_rel is an
+    # ABSOLUTE uncertainty on a ~0.02 1/V parameter -- poorly determined once it
+    # is comparable to the value scale itself (was "> 1" in the old log space).
+    assert ident.sigma_rel["k_theta"] > 0.02
 
 
 def test_dead_parameter_reports_inf_not_a_small_sigma():

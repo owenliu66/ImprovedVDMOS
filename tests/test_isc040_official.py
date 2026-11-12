@@ -105,6 +105,13 @@ def _load_diode() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def ch() -> dict:
     """The 25 C set (132 pts) + TC rows, grouped like the fit script."""
     iv = load_csv(DATA / "ISC040N10NM8_IV_25C.csv")
+    # The promoted record was fit on the 69 on-state / transfer IV rows
+    # (V_gs > 0). The two V_gs = 0 off-state rows (80 V, 25/125 C) added for
+    # the DIBL-cap experiment are NOT part of this record's fit data, so exclude
+    # them here -- the pin stays against the data the record was actually fit
+    # on. Promoting a cap-based record that uses them is a separate decision
+    # (see scripts/experiment_dibl_cap.py).
+    iv = iv.subset(iv.v_gs != 0.0)
     rid_vg, rid_vd, rid_id = _load_rdson_id("ISC040N10NM8_Rdson_Id_25C.csv")
     rv25 = [r for r in _load_rdson_vgs("ISC040N10NM8_Rdson_Vgs.csv")
             if abs(r[0] - 25.0) < 1e-6]

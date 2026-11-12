@@ -20,6 +20,7 @@ from vdmos_fit.ingest import (
     RdsSpec,
     RecTable,
     VthSpec,
+    first_data_column_kind,
     load_table,
     load_tables,
     parse_condition,
@@ -289,3 +290,15 @@ def test_all_repo_data_csvs_parse():
     # caps: pF scaled to farads, Type column split
     caps = [t for t in tables if isinstance(t, CapTable)]
     assert caps and all(1e-12 < t.c.mean() < 1e-5 for t in caps)
+
+
+def test_first_data_column_kind():
+    """The GUI picks a spec plot's x-axis from the CSV's first data column
+    (index skipped): the multi-T Rds(on)-vs-Vgs file plots against V_gs, the
+    25 C Rds(on)-vs-I_d file against I_d, the Vth-vs-Tj file against T_j."""
+    assert first_data_column_kind(
+        DATA / "ISC040N10NM8_Rdson_Vgs.csv") == "vgs"
+    assert first_data_column_kind(
+        DATA / "ISC040N10NM8_Rdson_Id_25C.csv") == "ids"
+    assert first_data_column_kind(
+        DATA / "ISC040N10NM8_Vth_Tj.csv") == "tj"

@@ -20,11 +20,13 @@ is only emitted when r_max != 0. At r_max = 0 the branch is R1 tied
 straight to K (R2's 1 uOhm alone still breaks the bridge loop).
 
 Channel expression: collapsed (ISC040 SJ-cap family: k_theta =
-k_beta_trap = k_lambda = g_k = 0 -- byte-identical to the pinned files)
-vs full family (those terms emitted). channel_expr_auto picks; the full
-form is generated from model.py _channel_current but has NO LTspice
-parity bench yet for the non-collapsed family -- the export report says
-so.
+k_beta_trap = k_lambda = g_k = v_diblmax = k_kneeform = 0 -- byte-identical
+to the pinned files) vs full family (those terms emitted). The full form
+transcribes model.py _channel_current including the DIBL-shift soft cap
+(v_diblmax/k_diblsharp) and the k_kneeform knee selector (mobility vs linear
+scale) and the negative-k_theta divisor guard -- it has NO LTspice parity
+bench yet for the non-collapsed family; the export report says so.
+channel_expr_auto picks collapsed only when every one of those is off.
 """
 
 from __future__ import annotations
@@ -65,8 +67,7 @@ def channel_expr(p: Params) -> str:
     dominates. Softplus overflow-safe: log(1+e^z) = max(z,0)+log(1+e^-|z|).
     """
     vd, vg = _vd_vg()
-    kdb = f"tanh({vd}/{p.v_dbsat:.6g})"
-    vth = f"({p.v_th0:.6g}-{p.k_eta:.6g}*{vd}*{kdb})"
+    vth = _vth(vd, p)
     voveff = _vov(vd, vg, p, vth)
     vknee = f"max({voveff},{p.v_kneemin:.6g})"          # k_theta = 0
     ich = (f"{p.k_p:.6g}*{voveff}*({_vdseff(vd, vknee, p)}"
@@ -84,12 +85,20 @@ def channel_expr_full(p: Params) -> str:
     """
     vd, vg = _vd_vg()
     kdb = f"tanh({vd}/{p.v_dbsat:.6g})"
-    vth = f"({p.v_th0:.6g}-{p.k_eta:.6g}*{vd}*{kdb})"
+    vth = _vth(vd, p)
     vov = _vov(vd, vg, p, vth)
     if p.k_beta_trap:
         vov = f"({vov}*(1+{p.k_beta_trap:.6g}*{vov}))"   # v_ov_eff2
-    vknee = (f"max({vov}/(1+{p.k_theta:.6g}*{vov}),{p.v_kneemin:.6g})"
-             if p.k_theta else f"max({vov},{p.v_kneemin:.6g})")
+    # knee, mirroring model.py's k_kneeform selector
+    if p.k_kneeform >= 0.5:
+        vknee = f"max({p.k_theta:.6g}*{vov},{p.v_kneemin:.6g})"
+    elif p.k_theta < 0.0:
+        vknee = (f"max({vov}/max(1+{p.k_theta:.6g}*{vov},{_KNEE_FLOOR}),"
+                 f"{p.v_kneemin:.6g})")
+    elif p.k_theta:
+        vknee = f"max({vov}/(1+{p.k_theta:.6g}*{vov}),{p.v_kneemin:.6g})"
+    else:
+        vknee = f"max({vov},{p.v_kneemin:.6g})"
     vds = _vdseff(vd, vknee, p)
     ich = (f"{p.k_p:.6g}*{vov}*({vds}-0.5*{vds}*{vds}/{vknee})"
            f"/(1+{vds}/{p.v_vsat:.6g})")
@@ -103,10 +112,31 @@ def channel_expr_full(p: Params) -> str:
 
 _SGN = "if(V(dx,sx)<0,-1,if(V(dx,sx)>0,1,0))"
 
+# Mirror of model.py _KNEE_DENOM_FLOOR: guards the mobility-knee divisor
+# 1 + k_theta*v_ov_eff2 against a NEGATIVE k_theta (wider knee) driving it
+# through zero. A no-op for k_theta >= 0 (divisor >= 1).
+_KNEE_FLOOR = "1e-9"
+
+
+def _vth(vd: str, p: Params) -> str:
+    """DIBL-shifted threshold, mirroring model.py: the raw shift
+    k_eta*v_ds*k_db is soft-capped at v_diblmax (the same power-law soft-min
+    as the charge cap) so v_th >= v_th0 - v_diblmax for every v_ds. Without
+    the cap a low-voltage fit extrapolates an unbounded linear DIBL that drives
+    v_th negative at high v_ds, which pins the overdrive at the charge cap and
+    freezes the saturation current (the exported-subckt 950 A failure).
+    v_diblmax = 0 -> the raw shift, byte-identical to the pre-cap export."""
+    shift = f"{p.k_eta:.6g}*{vd}*tanh({vd}/{p.v_dbsat:.6g})"
+    if p.v_diblmax > 0.0:
+        shift = (f"{shift}/pow(1+pow({shift}/{p.v_diblmax:.6g},"
+                 f"{p.k_diblsharp:.6g}),1/{p.k_diblsharp:.6g})")
+    return f"({p.v_th0:.6g}-{shift})"
+
 
 def channel_expr_auto(p: Params) -> str:
     collapsed = (p.k_theta == 0.0 and p.k_beta_trap == 0.0
-                 and p.k_lambda == 0.0 and p.g_k == 0.0)
+                 and p.k_lambda == 0.0 and p.g_k == 0.0
+                 and p.v_diblmax == 0.0 and p.k_kneeform == 0.0)
     return channel_expr(p) if collapsed else channel_expr_full(p)
 
 
@@ -125,6 +155,11 @@ def _vov(vd: str, vg: str, p: Params, vth: str) -> str:
 
 
 def _vdseff(vd: str, vknee: str, p: Params) -> str:
+    # mirror model.py: k_kneesharp = 0 is the legacy tanh soft-switch (the
+    # power-law form below divides by k_kneesharp in the exponent, so it must
+    # not be emitted at 0); k_kneesharp > 0 is the power-law soft-min.
+    if p.k_kneesharp == 0.0:
+        return f"({vknee}*tanh({vd}/{vknee}))"
     return (f"{vd}/pow(1+pow({vd}/{vknee},{p.k_kneesharp:.6g}),"
             f"1/{p.k_kneesharp:.6g})")
 

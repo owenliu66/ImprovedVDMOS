@@ -67,8 +67,8 @@ k_{db} = \tanh\!\left(\frac{v_{ds}}{v_{dbsat}}\right)
 $$
 
 $$
-v_{th} = v_{th0} - k_\eta\, v_{ds}\, k_{db}
-\qquad\text{(DIBL, bounded)}
+v_{th} = v_{th0} - \frac{k_\eta\, v_{ds}\, k_{db}}{\Bigl[1 + \bigl(k_\eta v_{ds} k_{db}/v_{diblmax}\bigr)^{k_{diblsharp}}\Bigr]^{1/k_{diblsharp}}}
+\qquad\text{(DIBL: shift bounded by } k_{db}\text{, soft-capped at } v_{diblmax};\ v_{diblmax}=0 \Rightarrow \text{no cap)}
 $$
 
 $$
@@ -87,8 +87,15 @@ v_{oveff2} = v_{oveff}\,\bigl(1 + k_{\beta\text{-trap}}\, v_{oveff}\bigr)
 $$
 
 $$
-v_{knee} = \max\!\left(\frac{v_{oveff2}}{1 + k_\theta\, v_{oveff2}},\; v_{kneemin}\right)
-\qquad\text{(vertical-field mobility degradation)}
+v_{knee} =
+\begin{cases}
+\max\!\left(\dfrac{v_{oveff2}}{1 + k_\theta\, v_{oveff2}},\; v_{kneemin}\right) & k_{kneeform}=0 \text{ (default, mobility)}\\[8pt]
+\max\!\bigl(k_\theta\, v_{oveff2},\; v_{kneemin}\bigr) & k_{kneeform}=1 \text{ (linear knee scale)}
+\end{cases}
+$$
+
+$$
+\text{($k_\theta$ is the gate-exponent knob in the first form, a knee multiplier in the second)}
 $$
 
 $$
@@ -157,6 +164,38 @@ the hard corner).
   untouched while knee width shrinks monotonically
   ($k \to \infty$ hard min, $k = 1$ harmonic, $k \approx 2.8$ reproduces the
   tanh). Same $0 \le dv_{dseff}/dv_{ds} \le 1$ derivative bound as the cap.
+- **Negative $k_\theta$ (wider knee)**: $k_\theta$ may go below 0, which makes
+  $v_{knee} = v_{oveff2}/(1 + k_\theta v_{oveff2}) > v_{oveff2}$ — a knee wider
+  than the $k_\theta \ge 0$ regime can give (the ISC040 low-voltage fit wants
+  this). The safe lower limit is the knee-divisor zero $-1/v_{ovmax}$: since
+  $v_{oveff2} < v_{ovmax}$ strictly (the charge cap is an asymptote), the
+  divisor stays positive inside that bound. $k_\theta$ is therefore fitted in
+  LINEAR space (it is not strictly positive), the GUI defaults its search floor
+  to $-1/v_{ovmax}$ (dynamic in $v_{ovmax}$), and `model.py` floors the divisor
+  (`_KNEE_DENOM_FLOOR`) as a numerical backstop — bit-identical for
+  $k_\theta \ge 0$.
+- **Linear knee-scale form** ($k_{kneeform}=1$): $v_{knee} = k_\theta v_{oveff2}$
+  — $k_\theta$ is a dimensionless knee multiplier (identity 1.0). No divisor, so
+  no singularity, no floor, no negative-$k_\theta$ hazard (this is the clean
+  alternative to the negative-$k_\theta$ hack above). The trade-off: the knee
+  grows *linearly* with overdrive, so $i_{d,sat} = \tfrac12 k_p k_\theta
+  v_{oveff2}^2$ and the gate exponent is **pinned at $\alpha = 2$** (square-law) —
+  all sub-2 flattening must come from $v_{vsat}$. Good for velocity/field-limited
+  SJ parts (wide knee); it cannot reproduce the mobility-limited $\alpha\in(1,2)$
+  regime the default form gives. Selector only ($k_{kneeform}\in\{0,1\}$), never
+  fitted; the GUI sets $k_\theta$'s search floor to $0$ in this form.
+- **DIBL-shift cap** $v_{diblmax}$, $k_{diblsharp}$: the raw DIBL shift
+  $k_\eta v_{ds} k_{db}$ grows without bound in $v_{ds}$, so a fit anchored on
+  low-voltage output curves (data stops near $v_{ds}\approx 5$ V) extrapolates an
+  aggressive linear DIBL that can drive $v_{th}$ negative at rated $v_{ds}$ (the
+  ISC040N10NM8 100 V failure mode). The same power-law soft-min as the gate-charge
+  cap ceilings the *shift* at $v_{diblmax}$, so $v_{th} \ge v_{th0} - v_{diblmax}$
+  for every $v_{ds}$; $v_{diblmax}=0$ is the uncapped model, bit for bit. Off is
+  reached by leaving it out of the free set (driving $v_{diblmax}\to 0^+$ is a
+  hard clip at zero shift, the opposite of off). The soft-min keeps the shift
+  monotone in $v_{ds}$ ($0 \le d\,\text{shift}/d\,\text{raw} \le 1$), so $v_{th}$
+  stays non-increasing and the package-R bracket proof (non-negative partials)
+  is untouched.
 - **Trench kink**: the gate is the one-sided sigmoid above, not bare tanh —
   tanh is odd and injects *negative* current below onset (non-physical, a
   convergence hazard in the off state).
@@ -393,11 +432,11 @@ Every model quantity is `<type prefix>_<suffix>` (source of truth:
 
 | prefix | type | examples |
 |---|---|---|
-| `v_` | voltage [V] | `v_th0`, `v_th`, `v_ov`, `v_ov_eff`, `v_ov_eff2`, `v_ovmax`, `v_sub`, `v_knee`, `v_kneemin`, `v_dseff`, `v_vsat`, `v_dbsat`, `v_thk`, `v_kovsoft` |
+| `v_` | voltage [V] | `v_th0`, `v_th`, `v_ov`, `v_ov_eff`, `v_ov_eff2`, `v_ovmax`, `v_sub`, `v_knee`, `v_kneemin`, `v_dseff`, `v_vsat`, `v_dbsat`, `v_diblmax`, `v_thk`, `v_kovsoft` |
 | `i_` | current [A] | `i_d` |
 | `r_` | resistance [Ω] | `r_d`, `r_s`, `r_sk` |
 | `g_` | conductance [S] | `g_k` — trench-kink conductance, *not* transconductance |
-| `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_beta_trap`, `k_agd` |
+| `k_` | factor | `k_db`, `k_kink`, `k_ovsharp`, `k_diblsharp`, `k_kneesharp`, `k_p`, `k_theta`, `k_eta`, `k_lambda`, `k_beta_trap`, `k_agd` |
 | `c_` | capacitance [F] | `c_gd`, `c_gs`, `c_ds`, `c_gd0`, `c_gdmax` |
 | `q_` | charge [C] | `q_gd`, `q_gs`, `q_ds` — the charge-master state variables |
 

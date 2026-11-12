@@ -103,6 +103,31 @@ def _norm_name(raw: str) -> tuple[str, str | None]:
     return re.sub(r"[^a-z0-9]", "", name.lower()), unit
 
 
+_META_KINDS = {"index", "condition", "note", "type"}
+
+
+def _first_data_kind_from_header(header: list[str]) -> str:
+    for raw in header:
+        name, _unit = _norm_name(raw)
+        kind = _FIELD_BY_NAME.get(name, (None, 0))[0]
+        if kind is None or kind in _META_KINDS:
+            continue
+        return kind
+    return ""
+
+
+def first_data_column_kind(source: str | Path) -> str:
+    """Semantic kind of the first DATA column of a spec CSV, skipping the
+    index column and metadata columns (condition/note/type). The GUI uses it
+    to lay a plot's x-axis the way the datasheet table is arranged: an
+    Rds(on)-vs-V_gs table (index, V_gs, R_dson, T_j, ...) plots against V_gs,
+    while an Rds(on)-vs-I_d table (index, I_d, R_dson, V_gs) plots against
+    I_d. Returns "" when no data column is recognised."""
+    with open(source, newline="", encoding="utf-8-sig") as fh:
+        header = next(csv.reader(fh), [])
+    return _first_data_kind_from_header(header)
+
+
 def _parse_unit(source: str, raw: str, kind: str, unit: str | None) -> float:
     """Multiplier to canonical units for one field kind.
 
@@ -191,6 +216,8 @@ class RdsSpec:
     condition: np.ndarray
     source: str
     notes: tuple[str, ...] = ()
+    x_kind: str = ""       # semantic kind of the CSV's first data column
+                           # (the GUI's natural x-axis for this table)
 
 
 @dataclass
@@ -200,6 +227,7 @@ class VthSpec:
     i_test: np.ndarray     # amps
     source: str
     notes: tuple[str, ...] = ()
+    x_kind: str = ""
 
 
 @dataclass
@@ -280,12 +308,13 @@ def load_table(path: str | Path, ref_temp: float = 25.0) -> Table:
                          "Celsius")
 
     kinds = set(by_kind)
+    x_kind = _first_data_kind_from_header([c.raw for c in cols])
     if kinds & _REC_KINDS:
         return _load_rec(source, by_kind, rows, notes)
     if "vth" in kinds:
-        return _load_vth(source, by_kind, rows, notes)
+        return _load_vth(source, by_kind, rows, notes, x_kind)
     if "rds" in kinds:
-        return _load_rds(source, by_kind, rows, notes)
+        return _load_rds(source, by_kind, rows, notes, x_kind)
     if "cap" in kinds:
         return _load_cap(source, by_kind, rows, notes)
     if "qg" in kinds:
@@ -410,7 +439,7 @@ def _load_qg(source: str, by_kind: dict, rows: list[dict],
 
 
 def _load_rds(source: str, by_kind: dict, rows: list[dict],
-              notes: list[str]) -> RdsSpec:
+              notes: list[str], x_kind: str = "") -> RdsSpec:
     rds = _get(source, by_kind, rows, "rds", True)
     cond = [parse_condition(str(c)) for c in _cond_arr(source, by_kind, rows)]
     vgs = _get(source, by_kind, rows, "vgs", False)
@@ -431,11 +460,11 @@ def _load_rds(source: str, by_kind: dict, rows: list[dict],
     tj, tn = _tj_arr(source, by_kind, rows, 25.0, cond=cond)
     return RdsSpec(vgs, rds, i_test, tj, np.array(
         [str(c) for c in _cond_arr(source, by_kind, rows)], dtype=object),
-        source, (*notes, *tn))
+        source, (*notes, *tn), x_kind=x_kind)
 
 
 def _load_vth(source: str, by_kind: dict, rows: list[dict],
-              notes: list[str]) -> VthSpec:
+              notes: list[str], x_kind: str = "") -> VthSpec:
     vth = _get(source, by_kind, rows, "vth", True)
     cond = [parse_condition(str(c)) for c in _cond_arr(source, by_kind, rows)]
     i_test = _get(source, by_kind, rows, "ids", False)
@@ -446,7 +475,7 @@ def _load_vth(source: str, by_kind: dict, rows: list[dict],
     if i_test is None:
         raise IngestError(source, "-", "missing required ids column")
     tj, tn = _tj_arr(source, by_kind, rows, 25.0, cond=cond)
-    return VthSpec(tj, vth, i_test, source, (*notes, *tn))
+    return VthSpec(tj, vth, i_test, source, (*notes, *tn), x_kind=x_kind)
 
 
 def _load_rec(source: str, by_kind: dict, rows: list[dict],
